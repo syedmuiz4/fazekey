@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "399483710992",
+    "project_id": "fazekey-a8d6e",
+    "storage_bucket": "fazekey-a8d6e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:399483710992:android:d2912fb6502cd42b392495",
+        "android_client_info": {
+          "package_name": "com.example.fazekey"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDNk8V3AbuS2FhrarNGSHwHNe0Kt9cXor8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:399483710992:android:3ebd81e3d4320cd6392495",
+        "android_client_info": {
+          "package_name": "com.fazekey.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDNk8V3AbuS2FhrarNGSHwHNe0Kt9cXor8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

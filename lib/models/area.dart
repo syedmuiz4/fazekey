@@ -1,0 +1,77 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+class Area {
+  const Area({
+    required this.id,
+    required this.name,
+    required this.location,
+    required this.floor,
+    required this.roomNumber,
+    required this.active,
+    required this.createdAt,
+    required this.allowedDepartments,
+    required this.allowedRoles,
+    required this.currentOccupancy,
+    required this.capacity,
+  });
+
+  final String id;
+  final String name;
+  final String location;
+  final String floor;
+  final String roomNumber;
+  final bool active;
+  final DateTime createdAt;
+  final List<String> allowedDepartments;
+  final List<String> allowedRoles;
+  final int currentOccupancy;
+  final int capacity;
+
+  factory Area.fromMap(String id, Map<String, dynamic> map) => Area(
+        id: id,
+        name: map['name'] ?? '',
+        location: map['location'] ?? '',
+        floor: map['floor'] ?? '',
+        roomNumber: map['roomNumber'] ?? '',
+        active: map['active'] ?? true,
+        createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+        allowedDepartments: List<String>.from(map['allowedDepartments'] ?? const []),
+        allowedRoles: List<String>.from(map['allowedRoles'] ?? const []),
+        currentOccupancy: map['currentOccupancy'] ?? 0,
+        capacity: map['capacity'] ?? 0,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'location': location,
+        'floor': floor,
+        'roomNumber': roomNumber,
+        'active': active,
+        'createdAt': Timestamp.fromDate(createdAt),
+        'allowedDepartments': allowedDepartments,
+        'allowedRoles': allowedRoles,
+        'currentOccupancy': currentOccupancy,
+        'capacity': capacity,
+      };
+
+  Area copyWith({
+    bool? active,
+    List<String>? allowedDepartments,
+    List<String>? allowedRoles,
+    int? currentOccupancy,
+    int? capacity,
+  }) =>
+      Area(
+        id: id,
+        name: name,
+        location: location,
+        floor: floor,
+        roomNumber: roomNumber,
+        active: active ?? this.active,
+        createdAt: createdAt,
+        allowedDepartments: allowedDepartments ?? this.allowedDepartments,
+        allowedRoles: allowedRoles ?? this.allowedRoles,
+        currentOccupancy: currentOccupancy ?? this.currentOccupancy,
+        capacity: capacity ?? this.capacity,
+      );
+}
