@@ -65,7 +65,7 @@ class AppUser {
         'photoUrl': photoUrl,
       };
 
-  AppUser copyWith({bool? hasFace}) => AppUser(
+  AppUser copyWith({bool? hasFace, String? photoUrl}) => AppUser(
         id: id,
         name: name,
         email: email,
@@ -75,6 +75,6 @@ class AppUser {
         role: role,
         createdAt: createdAt,
         hasFace: hasFace ?? this.hasFace,
-        photoUrl: photoUrl,
+        photoUrl: photoUrl ?? this.photoUrl,
       );
 }

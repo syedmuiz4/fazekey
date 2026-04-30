@@ -16,13 +16,33 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
+  static const _departments = [
+    'Software Engineering',
+    'Information Security and Web Technology',
+    'Multimedia',
+  ];
+
   final _form = GlobalKey<FormState>();
-  final fields = List.generate(6, (_) => TextEditingController());
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _phone = TextEditingController();
+  String _department = _departments.first;
+  int _level = 1;
+  String _area = 'Server Room';
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _password.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    const labels = ['Name', 'Email', 'Password', 'Department', 'Phone', 'Room'];
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -35,18 +55,45 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: Form(
                   key: _form,
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      for (var i = 0; i < labels.length; i++) ...[
-                        TextFormField(
-                          controller: fields[i],
-                          obscureText: labels[i] == 'Password',
-                          decoration: InputDecoration(labelText: labels[i]),
-                          validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
-                        ),
+                      TextFormField(controller: _name, decoration: const InputDecoration(labelText: 'Name'), validator: _required),
+                      const SizedBox(height: 12),
+                      TextFormField(controller: _email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'Email'), validator: _required),
+                      const SizedBox(height: 12),
+                      TextFormField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password'), validator: _required),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: _department,
+                        decoration: const InputDecoration(labelText: 'Department'),
+                        items: _departments.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
+                        onChanged: (value) {
+                          if (value != null) setState(() => _department = value);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(controller: _phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone'), validator: _required),
+                      const SizedBox(height: 16),
+                      _TextSelector<int>(
+                        label: 'Level',
+                        value: _level,
+                        options: const [1, 2, 3],
+                        textFor: (level) => 'Level $level',
+                        onChanged: (level) => setState(() => _level = level),
+                      ),
+                      const SizedBox(height: 16),
+                      _TextSelector<String>(
+                        label: 'Restricted Area',
+                        value: _area,
+                        options: const ['Server Room'],
+                        textFor: (area) => area,
+                        onChanged: (area) => setState(() => _area = area),
+                      ),
+                      if (auth.error != null) ...[
                         const SizedBox(height: 12),
+                        Text(auth.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
                       ],
-                      if (auth.error != null) Text(auth.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 20),
                       PrimaryButton(
                         label: 'Create Account',
                         loading: auth.loading,
@@ -54,12 +101,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         onPressed: () async {
                           if (!_form.currentState!.validate()) return;
                           final ok = await context.read<AuthProvider>().register(
-                                name: fields[0].text,
-                                email: fields[1].text,
-                                password: fields[2].text,
-                                department: fields[3].text,
-                                phone: fields[4].text,
-                                room: fields[5].text,
+                                name: _name.text,
+                                email: _email.text,
+                                password: _password.text,
+                                department: _department,
+                                phone: _phone.text,
+                                room: 'Level $_level - $_area',
                               );
                           if (ok && context.mounted) Navigator.pushReplacementNamed(context, FaceRegistrationScreen.route);
                         },
@@ -72,6 +119,49 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
+}
+
+class _TextSelector<T> extends StatelessWidget {
+  const _TextSelector({
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.textFor,
+    required this.onChanged,
+  });
+
+  final String label;
+  final T value;
+  final List<T> options;
+  final String Function(T value) textFor;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final option in options)
+              ChoiceChip(
+                label: Text(textFor(option)),
+                selected: option == value,
+                selectedColor: colors.primary.withValues(alpha: .24),
+                onSelected: (_) => onChanged(option),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

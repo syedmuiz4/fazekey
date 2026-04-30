@@ -41,7 +41,7 @@ class FaceProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final embedding = await _face.averageEmbeddings(captures);
-      await _firebase.saveFace(user.id, embedding);
+      await _firebase.saveFace(user.id, embedding, photoUrl: captures.first.path);
       await _face.localDb.upsertFace(userId: user.id, name: user.name, embedding: embedding);
       loading = false;
       notifyListeners();

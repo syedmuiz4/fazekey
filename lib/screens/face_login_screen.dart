@@ -118,7 +118,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         area: scanArea,
         status: hasAccess ? 'granted' : 'denied',
         reason: reason,
-        snapshotPath: user == null ? snapshotPath : null,
+        snapshotPath: hasAccess ? null : snapshotPath,
       );
       await logProvider.record(log);
       if (!mounted) return;
@@ -142,6 +142,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     if (areas.isEmpty) return null;
     final active = areas.where((a) => a.active).toList();
     if (active.isEmpty) return areas.first;
+    for (final area in active) {
+      if (area.name.toLowerCase() == 'server room') return area;
+    }
     for (final area in active) {
       if (area.name.toLowerCase() == 'it room') return area;
     }

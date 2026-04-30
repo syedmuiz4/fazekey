@@ -30,13 +30,14 @@ class FaceRecognitionService {
       enableClassification: true,
     ),
   );
-  Interpreter? _interpreter;
+  Interpreter? _faceNetInterpreter;
+  Interpreter? _blazeFaceInterpreter;
   Future<void>? _initializing;
 
   Future<void> initialize() async {
-    if (_interpreter != null) return;
+    if (_faceNetInterpreter != null && _blazeFaceInterpreter != null) return;
     if (_initializing != null) return _initializing!;
-    _initializing = _initializeInterpreter();
+    _initializing = _initializeInterpreters();
     try {
       await _initializing;
     } finally {
@@ -44,55 +45,71 @@ class FaceRecognitionService {
     }
   }
 
-  Future<void> _initializeInterpreter() async {
+  Future<void> _initializeInterpreters() async {
+    Interpreter? faceNet;
+    Interpreter? blazeFace;
     try {
-      final modelBuffer = await _loadBundledModelBuffer();
-      final interpreter = Interpreter.fromBuffer(modelBuffer);
-      _validateModel(interpreter);
-      _interpreter = interpreter;
+      final faceNetBuffer = await _loadBundledModelBuffer(FaceModelConfig.assetPath);
+      faceNet = Interpreter.fromBuffer(faceNetBuffer);
+      _validateFaceNetModel(faceNet);
+
+      final blazeFaceBuffer = await _loadBundledModelBuffer(
+        FaceModelConfig.blazeFaceShortRangeAssetPath,
+      );
+      blazeFace = Interpreter.fromBuffer(blazeFaceBuffer);
+
+      _faceNetInterpreter = faceNet;
+      _blazeFaceInterpreter = blazeFace;
     } on FaceRecognitionException {
+      faceNet?.close();
+      blazeFace?.close();
       rethrow;
     } on Object catch (e) {
+      faceNet?.close();
+      blazeFace?.close();
       final details = e.toString();
       if (details.contains('Unable to load asset')) {
         throw FaceRecognitionException(
-          'Unable to load face model asset at ${FaceModelConfig.assetPath}. '
+          'Unable to load a face model asset. Expected ${FaceModelConfig.assetPath} and ${FaceModelConfig.blazeFaceShortRangeAssetPath}. '
           'Confirm pubspec.yaml registers the directory under flutter/assets and run flutter clean, then flutter pub get. '
           'Details: $e',
         );
       }
       if (details.toLowerCase().contains('empty data')) {
         throw FaceRecognitionException(
-          'The bundled face model at ${FaceModelConfig.assetPath} loaded as empty data. '
-          'Replace it with a real MobileFaceNet .tflite binary and confirm the asset path is registered.',
+          'A bundled face model loaded as empty data. Replace it with a real .tflite binary and confirm the asset path is registered.',
         );
       }
       throw FaceRecognitionException(
-        'Face model missing, unreadable, or invalid at ${FaceModelConfig.assetPath}. '
-        'Add a real MobileFaceNet TFLite binary at that path. Details: $e',
+        'Face model missing, unreadable, or invalid. Expected MobileFaceNet at ${FaceModelConfig.assetPath} and BlazeFace short-range at ${FaceModelConfig.blazeFaceShortRangeAssetPath}. Details: $e',
       );
     }
   }
 
-  Future<Uint8List> _loadBundledModelBuffer() async {
-    final byteData = await rootBundle.load(FaceModelConfig.assetPath);
+  Future<Uint8List> _loadBundledModelBuffer(String assetPath) async {
+    final ByteData byteData = await rootBundle.load(assetPath);
+    if (byteData.lengthInBytes <= 0) {
+      throw FaceRecognitionException(
+        'The model asset at $assetPath is bundled but contains empty data.',
+      );
+    }
     final bytes = byteData.buffer.asUint8List(
       byteData.offsetInBytes,
       byteData.lengthInBytes,
     );
-    _validateModelBuffer(bytes);
+    _validateModelBuffer(assetPath, bytes);
     return bytes;
   }
 
-  void _validateModelBuffer(Uint8List bytes) {
+  void _validateModelBuffer(String assetPath, Uint8List bytes) {
     if (bytes.isEmpty) {
       throw FaceRecognitionException(
-        'The face model asset at ${FaceModelConfig.assetPath} is bundled but contains empty data.',
+        'The model asset at $assetPath is bundled but contains empty data.',
       );
     }
     if (bytes.lengthInBytes < 8) {
       throw FaceRecognitionException(
-        'The face model asset at ${FaceModelConfig.assetPath} is too small to be a valid TFLite model.',
+        'The model asset at $assetPath is too small to be a valid TFLite model.',
       );
     }
 
@@ -102,13 +119,12 @@ class FaceRecognitionService {
         bytes[7] == 0x33;
     if (!hasTfliteIdentifier) {
       throw FaceRecognitionException(
-        'The face model asset at ${FaceModelConfig.assetPath} is not a valid TensorFlow Lite flatbuffer. '
-        'Replace the current file with the actual MobileFaceNet .tflite binary.',
+        'The model asset at $assetPath is not a valid TensorFlow Lite flatbuffer. Replace it with the real .tflite binary.',
       );
     }
   }
 
-  void _validateModel(Interpreter interpreter) {
+  void _validateFaceNetModel(Interpreter interpreter) {
     final inputShape = interpreter.getInputTensor(0).shape;
     final outputShape = interpreter.getOutputTensor(0).shape;
     final hasExpectedInput = inputShape.length == 4 &&
@@ -201,7 +217,7 @@ class FaceRecognitionService {
       1,
       (_) => List<double>.filled(FaceModelConfig.embeddingSize, 0),
     );
-    _interpreter!.run(input, output);
+    _faceNetInterpreter!.run(input, output);
     return _l2Normalize(output.first);
   }
 
@@ -235,7 +251,9 @@ class FaceRecognitionService {
 
   Future<void> close() async {
     await _detector.close();
-    _interpreter?.close();
-    _interpreter = null;
+    _faceNetInterpreter?.close();
+    _blazeFaceInterpreter?.close();
+    _faceNetInterpreter = null;
+    _blazeFaceInterpreter = null;
   }
 }

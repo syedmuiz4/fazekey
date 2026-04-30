@@ -44,9 +44,9 @@ class AccessResultScreen extends StatelessWidget {
                 GlassCard(
                   child: Column(
                     children: [
-                      Text(user?.name ?? 'Unknown face', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                      Text(user?.name ?? log?.userName ?? 'Unknown face', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 8),
-                      Text(granted ? '${user.department} • Room ${user.room}' : (log?.reason ?? 'Face not recognized')),
+                      Text(granted ? '${user.department} - Room ${user.room}' : (log?.reason ?? 'Face not recognized')),
                     ],
                   ),
                 ),

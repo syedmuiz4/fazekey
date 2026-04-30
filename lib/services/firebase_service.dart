@@ -77,10 +77,11 @@ class FirebaseService {
     return AppUser.fromMap(snap.id, snap.data()!);
   }
 
-  Future<void> saveFace(String userId, List<double> embedding) async {
+  Future<void> saveFace(String userId, List<double> embedding, {String? photoUrl}) async {
     await userRef(userId).set({
       'hasFace': true,
       'faceEmbedding': embedding,
+      'photoUrl': ?photoUrl,
       'faceUpdatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
