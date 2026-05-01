@@ -179,13 +179,13 @@ class _HomeTab extends StatelessWidget {
         const SizedBox(height: 18),
         Row(
           children: [
-            Expanded(child: FilledButton.icon(onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route), icon: const Icon(Icons.add_business_rounded), label: const Text('Add Area'))),
+            Expanded(child: FilledButton(onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route), child: const Text('Add Area'))),
             const SizedBox(width: 12),
-            Expanded(child: FilledButton.tonalIcon(onPressed: () => _writeReport(context, logs), icon: const Icon(Icons.file_download_rounded), label: const Text('Report'))),
+            Expanded(child: FilledButton.tonal(onPressed: () => _writeReport(context, logs), child: const Text('Report'))),
           ],
         ),
         const SizedBox(height: 12),
-        FilledButton.tonalIcon(onPressed: () => Navigator.pushNamed(context, FaceLoginScreen.route), icon: const Icon(Icons.face_rounded), label: const Text('Run Access Scan')),
+        FilledButton.tonal(onPressed: () => Navigator.pushNamed(context, FaceLoginScreen.route), child: const Text('Run Access Scan')),
       ],
     );
   }
@@ -315,12 +315,17 @@ class _ReportSummary extends StatelessWidget {
 class _AreasTab extends StatelessWidget {
   const _AreasTab();
 
+  static const _normalStatusColor = Color(0xFF5B8DEF);
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AreaProvider>();
     return Scaffold(
       backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton(onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route), child: const Icon(Icons.add_rounded)),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route),
+        label: const Text('Add Area'),
+      ),
       body: RefreshIndicator(
         onRefresh: provider.refresh,
         child: ListView.separated(
@@ -329,25 +334,47 @@ class _AreasTab extends StatelessWidget {
           separatorBuilder: (_, index) => const SizedBox(height: 12),
           itemBuilder: (_, i) {
             final area = provider.areas[i];
-            return GlassCard(
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.sensor_door_rounded),
-                title: Text(area.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-                subtitle: Text('${area.location} - Floor ${area.floor} - Room ${area.roomNumber}\nOccupancy ${area.currentOccupancy}${area.capacity > 0 ? ' / ${area.capacity}' : ''}\nRoles: ${area.allowedRoles.isEmpty ? 'All' : area.allowedRoles.join(', ')}'),
-                isThreeLine: true,
-                trailing: Wrap(children: [
-                  IconButton(
-                    tooltip: area.active ? 'Deactivate' : 'Activate',
-                    onPressed: () => provider.updateArea(area.copyWith(active: !area.active)),
-                    icon: Icon(area.active ? Icons.toggle_on_rounded : Icons.toggle_off_rounded),
-                  ),
-                  IconButton(
-                    tooltip: 'Apply Server Room RBAC',
-                    onPressed: () => provider.updateArea(area.copyWith(allowedDepartments: const ['Information Security and Web Technology'], allowedRoles: const ['admin', 'security'])),
-                    icon: const Icon(Icons.admin_panel_settings_rounded),
-                  ),
-                ]),
+            final capacity = area.capacity <= 0 ? 1 : area.capacity;
+            final occupancyValue = (area.currentOccupancy / capacity).clamp(0.0, 1.0);
+            return Opacity(
+              opacity: area.active ? 1 : .5,
+              child: GlassCard(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
+                child: Column(
+                  children: [
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(area.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+                      subtitle: Text(
+                        '${area.location} - ${area.floor} - Room ${area.roomNumber}\n'
+                        'Occupancy ${area.currentOccupancy}${area.capacity > 0 ? ' / ${area.capacity}' : ''}\n'
+                        'Roles: ${area.allowedRoles.isEmpty ? 'All' : area.allowedRoles.join(', ')}',
+                      ),
+                      isThreeLine: true,
+                      trailing: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Switch(
+                            value: area.active,
+                            onChanged: (value) => provider.updateArea(area.copyWith(active: value)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(99),
+                      child: LinearProgressIndicator(
+                        value: occupancyValue,
+                        minHeight: 4,
+                        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: .58),
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                          _normalStatusColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -357,47 +384,182 @@ class _AreasTab extends StatelessWidget {
   }
 }
 
-class _LogsTab extends StatelessWidget {
+class _LogsTab extends StatefulWidget {
   const _LogsTab();
+
+  @override
+  State<_LogsTab> createState() => _LogsTabState();
+}
+
+class _LogsTabState extends State<_LogsTab> {
+  String _filter = 'All';
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<LogProvider>();
+    final logs = _filteredLogs(provider.logs);
+    final grouped = _groupLogs(logs);
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
         TextField(decoration: const InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: 'Search logs'), onChanged: provider.search),
-        const SizedBox(height: 14),
-        for (final log in provider.logs)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: GlassCard(
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(log.granted ? Icons.check_circle_rounded : Icons.cancel_rounded, color: log.granted ? Colors.greenAccent : Colors.redAccent),
-                title: Text(log.userName, style: const TextStyle(fontWeight: FontWeight.w800)),
-                subtitle: Text('${log.areaName} - ${DateFormat.yMMMd().add_jm().format(log.timestamp)}\n${log.reason}'),
-                isThreeLine: true,
-                trailing: !log.granted && log.snapshotPath != null
-                    ? TextButton(onPressed: () => _showSnapshot(context, log.snapshotPath!), child: const Text('View Snapshot'))
-                    : Text(log.status.toUpperCase()),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final label in const ['All', 'Granted', 'Denied'])
+              ChoiceChip(
+                label: Text(label),
+                selected: _filter == label,
+                showCheckmark: false,
+                onSelected: (_) => setState(() => _filter = label),
               ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        for (final entry in grouped.entries) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(2, 4, 2, 8),
+            child: Text(
+              entry.key,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w800,
+                  ),
             ),
           ),
+          for (final log in entry.value)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _LogCard(log: log, onSnapshot: () => _showSnapshot(context, log.snapshotPath!)),
+            ),
+        ],
         TextButton(onPressed: provider.loadMore, child: const Text('Load more')),
       ],
     );
   }
 
+  List<AccessLog> _filteredLogs(List<AccessLog> logs) {
+    if (_filter == 'Granted') return logs.where((log) => log.granted).toList();
+    if (_filter == 'Denied') return logs.where((log) => !log.granted).toList();
+    return logs;
+  }
+
+  Map<String, List<AccessLog>> _groupLogs(List<AccessLog> logs) {
+    final grouped = <String, List<AccessLog>>{};
+    for (final log in logs) {
+      grouped.putIfAbsent(_dateGroup(log.timestamp), () => []).add(log);
+    }
+    return grouped;
+  }
+
+  String _dateGroup(DateTime timestamp) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final logDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
+    final difference = today.difference(logDate).inDays;
+    if (difference == 0) return 'Today';
+    if (difference == 1) return 'Yesterday';
+    return DateFormat.yMMMd().format(timestamp);
+  }
+
   void _showSnapshot(BuildContext context, String path) {
     showDialog<void>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Unknown face snapshot'),
-        content: File(path).existsSync()
-            ? Image.file(File(path), fit: BoxFit.contain)
-            : Text('Snapshot is no longer available on this device.\n$path'),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+      barrierColor: Colors.black.withValues(alpha: .78),
+      builder: (_) => Dialog.fullscreen(
+        backgroundColor: const Color(0xFF070A0F),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Unknown Face Snapshot',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Colors.white, fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_rounded, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Center(
+                  child: File(path).existsSync()
+                      ? InteractiveViewer(child: Image.file(File(path), fit: BoxFit.contain))
+                      : Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            'Snapshot is no longer available on this device.\n$path',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogCard extends StatelessWidget {
+  const _LogCard({required this.log, required this.onSnapshot});
+
+  final AccessLog log;
+  final VoidCallback onSnapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = log.granted ? const Color(0xFF32D583) : const Color(0xFFFF5B66);
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: IntrinsicHeight(
+        child: Row(
+          children: [
+            Container(width: 4, color: statusColor),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(log.userName, style: const TextStyle(fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${log.areaName} - ${DateFormat.jm().format(log.timestamp)}\n${log.reason}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    if (!log.granted && log.snapshotPath != null)
+                      TextButton(onPressed: onSnapshot, child: const Text('View Snapshot'))
+                    else
+                      Text(
+                        log.status.toUpperCase(),
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(color: statusColor, fontWeight: FontWeight.w900),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -446,29 +608,50 @@ class _SettingsTab extends StatelessWidget {
                 onChanged: system.toggleAfterHoursAlerts,
                 title: const Text('After-hours Monitoring'),
                 subtitle: Text(settings.afterHoursAlerts ? 'Active: ${_time(settings.afterHoursStart)} - ${_time(settings.afterHoursEnd)}' : 'Paused'),
-                secondary: const Icon(Icons.nightlight_round),
+              ),
+              const Divider(height: 1),
+              SwitchListTile(
+                value: settings.intrusionAlerts,
+                onChanged: system.toggleIntrusionAlerts,
+                title: const Text('Intrusion Alerts'),
+                subtitle: Text(settings.intrusionAlerts ? 'Unknown and denied attempts are flagged' : 'Intrusion notifications are paused'),
               ),
               const Divider(height: 1),
               ListTile(
-                leading: const Icon(Icons.schedule_rounded),
                 title: const Text('Monitoring Window'),
                 subtitle: Text('${_time(settings.afterHoursStart)} - ${_time(settings.afterHoursEnd)}'),
-                trailing: const Icon(Icons.tune_rounded),
                 onTap: () => _showMonitoringWindow(context, system),
               ),
             ],
           ),
         ),
         const SizedBox(height: 12),
-        _SettingTile(icon: Icons.face_retouching_natural_rounded, title: 'Re-enroll Face Data', subtitle: user?.hasFace == true ? 'Refresh recognition profile' : 'Register face profile', onTap: () => Navigator.pushNamed(context, FaceRegistrationScreen.route)),
         _SettingTile(
-          icon: Icons.backup_rounded,
-          title: 'Backup',
-          subtitle: logs.pendingCount == 0 ? 'All logs are synced' : '${logs.pendingCount} logs waiting to sync',
-          onTap: logs.syncPending,
+          title: 'Edit Profile',
+          subtitle: 'Update your name, department, phone, and area',
+          onTap: user == null ? null : () => _showEditProfile(context, auth, user),
         ),
-        SwitchListTile(value: auth.darkMode, onChanged: auth.toggleDarkMode, title: const Text('Dark mode'), secondary: const Icon(Icons.dark_mode_rounded)),
-        FilledButton.tonalIcon(
+        _SettingTile(title: 'Re-enroll Face Data', subtitle: user?.hasFace == true ? 'Refresh recognition profile' : 'Register face profile', onTap: () => Navigator.pushNamed(context, FaceRegistrationScreen.route)),
+        _SettingTile(
+          title: 'Change Password',
+          subtitle: user?.email == null ? 'No account email available' : 'Send reset link to ${user!.email}',
+          onTap: auth.loading
+              ? null
+              : () async {
+                  final ok = await auth.sendPasswordReset();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(ok ? 'Password reset email sent.' : auth.error ?? 'Unable to send password reset email.')),
+                  );
+                },
+        ),
+        _SettingTile(
+          title: 'Help & Support',
+          subtitle: 'View support details and troubleshooting steps',
+          onTap: () => _showHelpSupport(context, logs),
+        ),
+        SwitchListTile(value: auth.darkMode, onChanged: auth.toggleDarkMode, title: const Text('Dark mode')),
+        FilledButton.tonal(
           onPressed: auth.loading
               ? null
               : () async {
@@ -477,8 +660,7 @@ class _SettingsTab extends StatelessWidget {
                   if (!context.mounted) return;
                   Navigator.pushNamedAndRemoveUntil(context, WelcomeScreen.route, (_) => false);
                 },
-          icon: const Icon(Icons.logout_rounded),
-          label: const Text('Logout'),
+          child: const Text('Logout'),
         ),
       ],
     );
@@ -545,6 +727,103 @@ class _SettingsTab extends StatelessWidget {
       },
     );
   }
+
+  Future<void> _showEditProfile(BuildContext context, AuthProvider auth, AppUser user) async {
+    final name = TextEditingController(text: user.name);
+    final department = TextEditingController(text: user.department);
+    final phone = TextEditingController(text: user.phone);
+    final room = TextEditingController(text: user.room);
+    final form = GlobalKey<FormState>();
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.fromLTRB(20, 4, 20, MediaQuery.viewInsetsOf(context).bottom + 24),
+        child: Form(
+          key: form,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Edit Profile', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+              const SizedBox(height: 16),
+              TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Name'), validator: _required),
+              const SizedBox(height: 12),
+              TextFormField(controller: department, decoration: const InputDecoration(labelText: 'Department'), validator: _required),
+              const SizedBox(height: 12),
+              TextFormField(controller: phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone'), validator: _required),
+              const SizedBox(height: 12),
+              TextFormField(controller: room, decoration: const InputDecoration(labelText: 'Restricted Area'), validator: _required),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () async {
+                    if (!form.currentState!.validate()) return;
+                    final ok = await auth.updateProfile(
+                      name: name.text,
+                      department: department.text,
+                      phone: phone.text,
+                      room: room.text,
+                    );
+                    if (!context.mounted) return;
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(ok ? 'Profile updated.' : auth.error ?? 'Unable to update profile.')),
+                    );
+                  },
+                  child: const Text('Save Profile'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    name.dispose();
+    department.dispose();
+    phone.dispose();
+    room.dispose();
+  }
+
+  Future<void> _showHelpSupport(BuildContext context, LogProvider logs) {
+    final syncText = logs.pendingCount > 0 ? '${logs.pendingCount} local records are waiting to sync.' : 'Local activity is synced.';
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Help & Support', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 12),
+            Text('For access issues, re-enroll face data and confirm your assigned restricted area.'),
+            const SizedBox(height: 8),
+            Text(syncText),
+            if (logs.error != null) ...[
+              const SizedBox(height: 8),
+              Text(logs.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ],
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: logs.syncing ? null : logs.syncPending,
+                child: Text(logs.syncing ? 'Syncing' : 'Sync Activity'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
 }
 
 class _FaceAvatar extends StatelessWidget {
@@ -566,12 +845,11 @@ class _FaceAvatar extends StatelessWidget {
 }
 
 class _SettingTile extends StatelessWidget {
-  const _SettingTile({required this.icon, required this.title, required this.subtitle, this.onTap});
-  final IconData icon;
+  const _SettingTile({required this.title, required this.subtitle, this.onTap});
   final String title;
   final String subtitle;
   final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) => ListTile(leading: Icon(icon), title: Text(title), subtitle: Text(subtitle), onTap: onTap);
+  Widget build(BuildContext context) => ListTile(title: Text(title), subtitle: Text(subtitle), onTap: onTap);
 }

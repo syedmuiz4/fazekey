@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shimmer/shimmer.dart';
 
 import '../providers/auth_provider.dart';
 import '../widgets/app_background.dart';
@@ -15,6 +16,8 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  static const _logoHeroTag = 'facekey-logo';
+
   @override
   void initState() {
     super.initState();
@@ -30,30 +33,43 @@ class _SplashScreenState extends State<SplashScreen> {
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: Center(
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(begin: .82, end: 1),
-            duration: const Duration(milliseconds: 900),
-            curve: Curves.easeOutBack,
-            builder: (_, value, child) => Transform.scale(scale: value, child: child),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 112,
-                  height: 112,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(34),
-                    gradient: const LinearGradient(colors: [Color(0xFF6C63FF), Color(0xFF00E5A8)]),
+        body: SafeArea(
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Center(
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween(begin: .9, end: 1),
+                  duration: const Duration(milliseconds: 1100),
+                  curve: Curves.easeOutCubic,
+                  builder: (_, value, child) => Transform.scale(scale: value, child: child),
+                  child: Hero(
+                    tag: _logoHeroTag,
+                    child: Shimmer.fromColors(
+                      baseColor: Colors.white,
+                      highlightColor: Theme.of(context).colorScheme.primary.withValues(alpha: .38),
+                      period: const Duration(milliseconds: 1900),
+                      child: Image.asset(
+                        'assets/images/logo.png',
+                        width: 240.0,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                      ),
+                    ),
                   ),
-                  child: const Icon(Icons.face_retouching_natural_rounded, size: 58, color: Colors.white),
                 ),
-                const SizedBox(height: 22),
-                Text('FaceKey', style: Theme.of(context).textTheme.displaySmall?.copyWith(fontWeight: FontWeight.w900)),
-                const SizedBox(height: 8),
-                Text('Campus access, verified locally.', style: Theme.of(context).textTheme.bodyLarge),
-              ],
-            ),
+              ),
+              Positioned(
+                bottom: 24,
+                child: Text(
+                  'v1.0.0',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

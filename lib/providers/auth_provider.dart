@@ -80,6 +80,40 @@ class AuthProvider extends ChangeNotifier {
     });
   }
 
+  Future<bool> updateProfile({
+    required String name,
+    required String department,
+    required String phone,
+    required String room,
+  }) async {
+    final current = user;
+    if (current == null) {
+      error = 'No signed-in profile is available to update.';
+      notifyListeners();
+      return false;
+    }
+    return _guard(() async {
+      final next = current.copyWith(
+        name: name.trim(),
+        department: department.trim(),
+        phone: phone.trim(),
+        room: room.trim(),
+      );
+      await _firebase.updateUserProfile(next);
+      user = next;
+    });
+  }
+
+  Future<bool> sendPasswordReset() async {
+    final email = user?.email;
+    if (email == null || email.trim().isEmpty) {
+      error = 'No account email is available for password reset.';
+      notifyListeners();
+      return false;
+    }
+    return _guard(() => _firebase.sendPasswordResetEmail(email));
+  }
+
   Future<bool> _guard(Future<void> Function() action) async {
     loading = true;
     error = null;

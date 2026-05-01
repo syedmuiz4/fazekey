@@ -65,13 +65,21 @@ class AppUser {
         'photoUrl': photoUrl,
       };
 
-  AppUser copyWith({bool? hasFace, String? photoUrl}) => AppUser(
+  AppUser copyWith({
+    String? name,
+    String? department,
+    String? phone,
+    String? room,
+    bool? hasFace,
+    String? photoUrl,
+  }) =>
+      AppUser(
         id: id,
-        name: name,
+        name: name ?? this.name,
         email: email,
-        department: department,
-        phone: phone,
-        room: room,
+        department: department ?? this.department,
+        phone: phone ?? this.phone,
+        room: room ?? this.room,
         role: role,
         createdAt: createdAt,
         hasFace: hasFace ?? this.hasFace,

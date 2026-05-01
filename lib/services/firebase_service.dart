@@ -77,6 +77,10 @@ class FirebaseService {
     return AppUser.fromMap(snap.id, snap.data()!);
   }
 
+  Future<void> updateUserProfile(AppUser user) {
+    return userRef(user.id).set(user.toMap(), SetOptions(merge: true));
+  }
+
   Future<void> saveFace(String userId, List<double> embedding, {String? photoUrl}) async {
     await userRef(userId).set({
       'hasFace': true,
@@ -87,6 +91,10 @@ class FirebaseService {
   }
 
   Future<void> signOut() => auth.signOut();
+
+  Future<void> sendPasswordResetEmail(String email) {
+    return _authCall(() => auth.sendPasswordResetEmail(email: email.trim()));
+  }
 
   Stream<List<Area>> watchAreas() => firestore
       .collection('areas')
@@ -157,6 +165,7 @@ class FirebaseService {
 
   Future<void> _maybeCreateSecurityNotification(AccessLog log) async {
     final settings = await getSystemSettings();
+    if (!settings.intrusionAlerts && !log.granted) return;
     if (!settings.afterHoursAlerts || !settings.isAfterHours) return;
     if (log.granted && !settings.globalLockdown) return;
     await firestore.collection('notifications').add({

@@ -10,16 +10,20 @@ class PrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final labelText = Text(label, style: const TextStyle(fontWeight: FontWeight.w800));
     return SizedBox(
       width: double.infinity,
       height: 56,
-      child: FilledButton.icon(
-        onPressed: loading ? null : onPressed,
-        icon: loading
-            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-            : Icon(icon ?? Icons.arrow_forward_rounded),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
-      ),
+      child: loading || icon != null
+          ? FilledButton.icon(
+              onPressed: loading ? null : onPressed,
+              icon: loading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : Icon(icon),
+              label: labelText,
+            )
+          : FilledButton(
+              onPressed: onPressed,
+              child: labelText,
+            ),
     );
   }
 }

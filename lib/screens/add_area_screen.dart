@@ -17,29 +17,18 @@ class AddAreaScreen extends StatefulWidget {
 
 class _AddAreaScreenState extends State<AddAreaScreen> {
   final _form = GlobalKey<FormState>();
-  final _name = TextEditingController();
-  final _location = TextEditingController();
-  final _floor = TextEditingController();
-  final _room = TextEditingController();
-  final _departments = TextEditingController();
-  final _roles = TextEditingController(text: 'admin, security');
-  final _capacity = TextEditingController(text: '0');
 
-  @override
-  void dispose() {
-    _name.dispose();
-    _location.dispose();
-    _floor.dispose();
-    _room.dispose();
-    _departments.dispose();
-    _roles.dispose();
-    _capacity.dispose();
-    super.dispose();
-  }
+  String _location = _locations.first;
+  String _floor = _floors.first;
+  String _room = _rooms.first;
+  String _department = _departments.first;
+  String _role = _roles.first;
+  int _capacity = _capacities[2];
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AreaProvider>();
+    final areaName = '$_floor - Room $_room';
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -51,20 +40,59 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
               child: Form(
                 key: _form,
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    TextFormField(controller: _name, decoration: const InputDecoration(labelText: 'Area name'), validator: _required),
+                    Text(
+                      areaName,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Structured area profile',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 18),
+                    DropdownButtonFormField<String>(
+                      initialValue: _location,
+                      decoration: const InputDecoration(labelText: 'Location'),
+                      items: _locations.map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                      onChanged: (value) => setState(() => _location = value ?? _location),
+                    ),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _location, decoration: const InputDecoration(labelText: 'Location'), validator: _required),
+                    DropdownButtonFormField<String>(
+                      initialValue: _floor,
+                      decoration: const InputDecoration(labelText: 'Floor'),
+                      items: _floors.map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                      onChanged: (value) => setState(() => _floor = value ?? _floor),
+                    ),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _floor, decoration: const InputDecoration(labelText: 'Floor'), validator: _required),
+                    DropdownButtonFormField<String>(
+                      initialValue: _room,
+                      decoration: const InputDecoration(labelText: 'Room'),
+                      items: _rooms.map((value) => DropdownMenuItem(value: value, child: Text('Room $value'))).toList(),
+                      onChanged: (value) => setState(() => _room = value ?? _room),
+                    ),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _room, decoration: const InputDecoration(labelText: 'Room number'), validator: _required),
+                    DropdownButtonFormField<String>(
+                      initialValue: _department,
+                      decoration: const InputDecoration(labelText: 'Department'),
+                      items: _departments.map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                      onChanged: (value) => setState(() => _department = value ?? _department),
+                    ),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _departments, decoration: const InputDecoration(labelText: 'Allowed departments', hintText: 'IT, Security')),
+                    DropdownButtonFormField<String>(
+                      initialValue: _role,
+                      decoration: const InputDecoration(labelText: 'Role'),
+                      items: _roles.map((value) => DropdownMenuItem(value: value, child: Text(value))).toList(),
+                      onChanged: (value) => setState(() => _role = value ?? _role),
+                    ),
                     const SizedBox(height: 12),
-                    TextFormField(controller: _roles, decoration: const InputDecoration(labelText: 'Allowed roles', hintText: 'admin, security, staff')),
-                    const SizedBox(height: 12),
-                    TextFormField(controller: _capacity, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Occupancy capacity'), validator: _number),
+                    DropdownButtonFormField<int>(
+                      initialValue: _capacity,
+                      decoration: const InputDecoration(labelText: 'Occupancy capacity'),
+                      items: _capacities.map((value) => DropdownMenuItem(value: value, child: Text(value.toString()))).toList(),
+                      onChanged: (value) => setState(() => _capacity = value ?? _capacity),
+                    ),
                     if (provider.error != null) ...[
                       const SizedBox(height: 12),
                       Text(provider.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -79,16 +107,16 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
                         await context.read<AreaProvider>().addArea(
                               Area(
                                 id: '',
-                                name: _name.text.trim(),
-                                location: _location.text.trim(),
-                                floor: _floor.text.trim(),
-                                roomNumber: _room.text.trim(),
+                                name: areaName,
+                                location: _location,
+                                floor: _floor,
+                                roomNumber: _room,
                                 active: true,
                                 createdAt: DateTime.now(),
-                                allowedDepartments: _csv(_departments.text),
-                                allowedRoles: _csv(_roles.text),
+                                allowedDepartments: [_department],
+                                allowedRoles: [_role],
                                 currentOccupancy: 0,
-                                capacity: int.tryParse(_capacity.text.trim()) ?? 0,
+                                capacity: _capacity,
                               ),
                             );
                         if (context.mounted) Navigator.pop(context);
@@ -104,7 +132,10 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
     );
   }
 
-  String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
-  String? _number(String? value) => int.tryParse(value?.trim() ?? '') == null ? 'Enter a number' : null;
-  List<String> _csv(String value) => value.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+  static const _locations = ['FSKTM'];
+  static const _floors = ['Level 1', 'Level 2', 'Level 3'];
+  static const _rooms = ['31', '32', '33', '34', '35', '36'];
+  static const _departments = ['Software Engineering', 'Information Security', 'Multimedia'];
+  static const _roles = ['Admin', 'Security', 'Staff'];
+  static const _capacities = [10, 25, 50, 75, 100];
 }

@@ -4,6 +4,7 @@ class SystemSettings {
   const SystemSettings({
     required this.globalLockdown,
     required this.afterHoursAlerts,
+    required this.intrusionAlerts,
     required this.afterHoursStart,
     required this.afterHoursEnd,
     required this.updatedAt,
@@ -11,6 +12,7 @@ class SystemSettings {
 
   final bool globalLockdown;
   final bool afterHoursAlerts;
+  final bool intrusionAlerts;
   final int afterHoursStart;
   final int afterHoursEnd;
   final DateTime updatedAt;
@@ -18,6 +20,7 @@ class SystemSettings {
   factory SystemSettings.defaults() => SystemSettings(
         globalLockdown: false,
         afterHoursAlerts: true,
+        intrusionAlerts: true,
         afterHoursStart: 18,
         afterHoursEnd: 7,
         updatedAt: DateTime.now(),
@@ -28,6 +31,7 @@ class SystemSettings {
     return SystemSettings(
       globalLockdown: map['globalLockdown'] ?? false,
       afterHoursAlerts: map['afterHoursAlerts'] ?? true,
+      intrusionAlerts: map['intrusionAlerts'] ?? true,
       afterHoursStart: map['afterHoursStart'] ?? 18,
       afterHoursEnd: map['afterHoursEnd'] ?? 7,
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -37,6 +41,7 @@ class SystemSettings {
   Map<String, dynamic> toMap() => {
         'globalLockdown': globalLockdown,
         'afterHoursAlerts': afterHoursAlerts,
+        'intrusionAlerts': intrusionAlerts,
         'afterHoursStart': afterHoursStart,
         'afterHoursEnd': afterHoursEnd,
         'updatedAt': Timestamp.fromDate(updatedAt),
@@ -54,12 +59,14 @@ class SystemSettings {
   SystemSettings copyWith({
     bool? globalLockdown,
     bool? afterHoursAlerts,
+    bool? intrusionAlerts,
     int? afterHoursStart,
     int? afterHoursEnd,
   }) =>
       SystemSettings(
         globalLockdown: globalLockdown ?? this.globalLockdown,
         afterHoursAlerts: afterHoursAlerts ?? this.afterHoursAlerts,
+        intrusionAlerts: intrusionAlerts ?? this.intrusionAlerts,
         afterHoursStart: afterHoursStart ?? this.afterHoursStart,
         afterHoursEnd: afterHoursEnd ?? this.afterHoursEnd,
         updatedAt: DateTime.now(),

@@ -42,6 +42,8 @@ class SystemProvider extends ChangeNotifier {
 
   Future<void> toggleAfterHoursAlerts(bool value) => save(settings.copyWith(afterHoursAlerts: value));
 
+  Future<void> toggleIntrusionAlerts(bool value) => save(settings.copyWith(intrusionAlerts: value));
+
   Future<void> updateAfterHours({required int start, required int end}) {
     return save(settings.copyWith(afterHoursStart: start, afterHoursEnd: end));
   }
