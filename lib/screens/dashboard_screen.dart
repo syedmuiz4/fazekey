@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shimmer/shimmer.dart';
@@ -128,6 +127,7 @@ class _HomeTab extends StatelessWidget {
     final logs = context.watch<LogProvider>().logs;
     final logProvider = context.watch<LogProvider>();
     final system = context.watch<SystemProvider>();
+    final user = context.watch<AuthProvider>().user;
     final areas = context.watch<AreaProvider>().areas;
     final occupied = areas.fold<int>(0, (sum, area) => sum + area.currentOccupancy);
     final capacity = areas.fold<int>(0, (sum, area) => sum + area.capacity);
@@ -135,51 +135,15 @@ class _HomeTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        const SizedBox(height: 4),
-        Center(
-          child: Image.asset(
-            'assets/images/logo1.png',
-            width: 220.0,
-            fit: BoxFit.contain,
-            filterQuality: FilterQuality.high,
-          ),
-        ),
-        const SizedBox(height: 18),
-        ShaderMask(
-          blendMode: BlendMode.srcIn,
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFF22D3EE), Color(0xFFA855F7)],
-          ).createShader(bounds),
-          child: Text(
-            'FaceKey',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.montserrat(
-              textStyle: Theme.of(context).textTheme.displaySmall,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 2.0,
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        Text(
-          'Human-centric campus security with intelligent face access and real-time awareness.',
-          textAlign: TextAlign.center,
-          style: GoogleFonts.inter(
-            textStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .7),
-                ),
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 18),
-        _StatusStrip(
+        _ConsoleHeader(
+          name: user?.name ?? 'Administrator',
           lockdown: system.settings.globalLockdown,
           syncing: logProvider.syncing,
           pending: logProvider.pendingCount,
           onSync: logProvider.syncPending,
           onLockdownChanged: system.toggleLockdown,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         FutureBuilder<Map<String, int>>(
           future: FirebaseService().dashboardStats(),
           builder: (context, snapshot) {
@@ -266,9 +230,11 @@ class _HomeTab extends StatelessWidget {
           children: [
             Expanded(child: FilledButton(onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route), child: const Text('Add Area'))),
             const SizedBox(width: 12),
-            Expanded(child: FilledButton.tonal(onPressed: () => _writeReport(context, logs), child: const Text('Report'))),
+            Expanded(child: FilledButton.tonal(onPressed: () => _showIncidentReportForm(context, user, areas), child: const Text('Log Incident'))),
           ],
         ),
+        const SizedBox(height: 12),
+        FilledButton.tonal(onPressed: () => _writeReport(context, logs), child: const Text('Export Security Report')),
         const SizedBox(height: 12),
         FilledButton.tonal(onPressed: () => Navigator.pushNamed(context, FaceLoginScreen.route), child: const Text('Run Access Scan')),
       ],
@@ -295,6 +261,15 @@ class _HomeTab extends StatelessWidget {
     messenger.showSnackBar(SnackBar(content: Text('PDF report saved: ${file.path}')));
   }
 
+  Future<void> _showIncidentReportForm(BuildContext context, AppUser? user, List<Area> areas) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _IncidentReportSheet(user: user, areas: areas),
+    );
+  }
+
   static const _barColors = [
     Color(0xFF5B8DEF),
     Color(0xFF00B894),
@@ -304,8 +279,9 @@ class _HomeTab extends StatelessWidget {
   ];
 }
 
-class _StatusStrip extends StatelessWidget {
-  const _StatusStrip({
+class _ConsoleHeader extends StatelessWidget {
+  const _ConsoleHeader({
+    required this.name,
     required this.lockdown,
     required this.syncing,
     required this.pending,
@@ -313,6 +289,7 @@ class _StatusStrip extends StatelessWidget {
     required this.onLockdownChanged,
   });
 
+  final String name;
   final bool lockdown;
   final bool syncing;
   final int pending;
@@ -321,21 +298,81 @@ class _StatusStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        FilterChip(
-          selected: lockdown,
-          label: Text(lockdown ? 'Access: Lockdown' : 'Access: Normal'),
-          selectedColor: Colors.red.withValues(alpha: .22),
-          onSelected: onLockdownChanged,
-        ),
-        ActionChip(
-          label: _SyncLabel(syncing: syncing, pending: pending),
-          onPressed: syncing ? null : onSync,
-        ),
-      ],
+    return GlassCard(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Welcome, $name', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text(
+            'Security Monitoring Console',
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+          const SizedBox(height: 4),
+          StreamBuilder<DateTime>(
+            stream: Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()),
+            initialData: DateTime.now(),
+            builder: (context, snapshot) {
+              final now = snapshot.data ?? DateTime.now();
+              return Text(
+                '${DateFormat('EEEE, MMMM d').format(now)} - ${DateFormat.jm().format(now)}',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              );
+            },
+          ),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _StatusChip(
+                  icon: lockdown ? Icons.lock_rounded : Icons.verified_user_rounded,
+                  label: Text(lockdown ? 'Access: Lockdown' : 'Access: Normal'),
+                  color: lockdown ? const Color(0xFFFF5B66) : const Color(0xFF32D583),
+                  onTap: () => onLockdownChanged(!lockdown),
+                ),
+                const SizedBox(width: 8),
+                _StatusChip(
+                  icon: pending > 0 ? Icons.cloud_upload_rounded : Icons.cloud_done_rounded,
+                  label: _SyncLabel(syncing: syncing, pending: pending),
+                  color: pending > 0 ? const Color(0xFFFDB022) : const Color(0xFF22D3EE),
+                  onTap: syncing ? null : onSync,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final Widget label;
+  final Color color;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ActionChip(
+      avatar: Icon(icon, color: color, size: 18),
+      label: label,
+      onPressed: onTap,
+      side: BorderSide(color: color.withValues(alpha: .34)),
+      backgroundColor: color.withValues(alpha: .12),
+      labelStyle: Theme.of(context).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
     );
   }
 }
@@ -395,6 +432,144 @@ class _ReportSummary extends StatelessWidget {
       ),
     );
   }
+}
+
+class _IncidentReportSheet extends StatefulWidget {
+  const _IncidentReportSheet({required this.user, required this.areas});
+
+  final AppUser? user;
+  final List<Area> areas;
+
+  @override
+  State<_IncidentReportSheet> createState() => _IncidentReportSheetState();
+}
+
+class _IncidentReportSheetState extends State<_IncidentReportSheet> {
+  final _form = GlobalKey<FormState>();
+  final _title = TextEditingController();
+  final _details = TextEditingController();
+  String _severity = 'Medium';
+  String? _areaName;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final options = _areaOptions;
+    _areaName = options.isEmpty ? null : options.first;
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _details.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final areaOptions = _areaOptions;
+    final selectedArea = _areaName != null && areaOptions.contains(_areaName) ? _areaName : areaOptions.first;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(20, 4, 20, MediaQuery.viewInsetsOf(context).bottom + 24),
+      child: Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Incident Report', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            Text(
+              'Log a security event for review and response tracking.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(controller: _title, decoration: const InputDecoration(labelText: 'Incident title'), validator: _required),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _severity,
+              decoration: const InputDecoration(labelText: 'Severity'),
+              items: _severities.map((severity) => DropdownMenuItem(value: severity, child: Text(severity))).toList(),
+              onChanged: (value) => setState(() => _severity = value ?? _severity),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              key: ValueKey('incident-area-$selectedArea'),
+              initialValue: selectedArea,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Area'),
+              validator: _required,
+              items: areaOptions
+                  .map(
+                    (area) => DropdownMenuItem(
+                      value: area,
+                      child: Text(area, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _areaName = value),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _details,
+              minLines: 4,
+              maxLines: 6,
+              decoration: const InputDecoration(labelText: 'Details'),
+              validator: _required,
+            ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _saving
+                    ? null
+                    : () async {
+                        if (!_form.currentState!.validate()) return;
+                        setState(() => _saving = true);
+                        final messenger = ScaffoldMessenger.of(context);
+                        final navigator = Navigator.of(context);
+                        try {
+                          await FirebaseService().addIncidentReport(
+                            reporterId: widget.user?.id ?? '',
+                            reporterName: widget.user?.name ?? 'Administrator',
+                            title: _title.text,
+                            severity: _severity,
+                            areaName: selectedArea ?? 'Campus',
+                            details: _details.text,
+                          );
+                          if (!mounted) return;
+                          navigator.pop();
+                          messenger.showSnackBar(const SnackBar(content: Text('Incident report logged.')));
+                        } catch (e) {
+                          if (!mounted) return;
+                          setState(() => _saving = false);
+                          messenger.showSnackBar(SnackBar(content: Text('Unable to log incident: $e')));
+                        }
+                      },
+                child: Text(_saving ? 'Logging...' : 'Submit Incident'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<String> get _areaOptions {
+    final names = widget.areas
+        .where((area) => area.active)
+        .map((area) => area.name.trim().isEmpty ? '${area.floor} - Room ${area.roomNumber}' : area.name.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return names.isEmpty ? const ['Campus'] : names;
+  }
+
+  String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
+
+  static const _severities = ['Low', 'Medium', 'High', 'Critical'];
 }
 
 class _AreasTab extends StatelessWidget {
@@ -713,22 +888,8 @@ class _SettingsTab extends StatelessWidget {
         const SizedBox(height: 12),
         _SettingTile(
           title: 'Edit Profile',
-          subtitle: 'Update your name, department, phone, and area',
+          subtitle: 'Profile details, face enrollment, and password reset',
           onTap: user == null ? null : () => _showEditProfile(context, auth, user),
-        ),
-        _SettingTile(title: 'Re-enroll Face Data', subtitle: user?.hasFace == true ? 'Refresh recognition profile' : 'Register face profile', onTap: () => Navigator.pushNamed(context, FaceRegistrationScreen.route)),
-        _SettingTile(
-          title: 'Change Password',
-          subtitle: user?.email == null ? 'No account email available' : 'Send reset link to ${user!.email}',
-          onTap: auth.loading
-              ? null
-              : () async {
-                  final ok = await auth.sendPasswordReset();
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(ok ? 'Password reset email sent.' : auth.error ?? 'Unable to send password reset email.')),
-                  );
-                },
         ),
         _SettingTile(
           title: 'Help & Support',
@@ -910,6 +1071,11 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Edit Profile', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text(
+              'Firebase profile data is loaded into the fields below.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
             const SizedBox(height: 16),
             TextFormField(controller: _name, decoration: const InputDecoration(labelText: 'Name'), validator: _required),
             const SizedBox(height: 12),
@@ -985,6 +1151,38 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
                       },
                 child: const Text('Save Profile'),
               ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.face_retouching_natural_rounded),
+                label: Text(widget.user.hasFace ? 'Re-enroll Face Data' : 'Register Face Data'),
+                onPressed: () {
+                  final navigator = Navigator.of(context);
+                  navigator.pop();
+                  navigator.pushNamed(FaceRegistrationScreen.route);
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.lock_reset_rounded),
+              title: const Text('Change Password'),
+              subtitle: Text(widget.user.email.isEmpty ? 'No account email available' : 'Send Firebase reset email to ${widget.user.email}'),
+              onTap: widget.auth.loading || widget.user.email.isEmpty
+                  ? null
+                  : () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      final ok = await widget.auth.sendPasswordReset();
+                      if (!context.mounted) return;
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text(ok ? 'Password reset email sent to ${widget.user.email}.' : widget.auth.error ?? 'Unable to send password reset email.'),
+                        ),
+                      );
+                    },
             ),
           ],
         ),

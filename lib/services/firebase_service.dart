@@ -4,7 +4,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 
 import '../models/access_log.dart';
-import '../models/app_notification.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
 import '../models/system_settings.dart';
@@ -142,7 +141,27 @@ class FirebaseService {
     if (log.granted) {
       await updateAreaOccupancy(log.areaId, 1);
     }
-    await _maybeCreateSecurityNotification(log);
+  }
+
+  Future<void> addIncidentReport({
+    required String reporterId,
+    required String reporterName,
+    required String title,
+    required String severity,
+    required String areaName,
+    required String details,
+  }) async {
+    final report = {
+      'reporterId': reporterId,
+      'reporterName': reporterName.trim(),
+      'title': title.trim(),
+      'severity': severity.trim(),
+      'areaName': areaName.trim(),
+      'details': details.trim(),
+      'status': 'open',
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    await firestore.collection('incidentReports').add(report);
   }
 
   Future<void> syncEncodedLog(Map<String, dynamic> row) async {
@@ -151,12 +170,6 @@ class FirebaseService {
     payload['synced'] = true;
     await firestore.collection('accessLogs').doc(row['id'] as String).set(payload);
   }
-
-  Stream<List<AppNotification>> watchNotifications() => firestore
-      .collection('notifications')
-      .orderBy('createdAt', descending: true)
-      .snapshots()
-      .map((s) => s.docs.map((d) => AppNotification.fromMap(d.id, d.data())).toList());
 
   DocumentReference<Map<String, dynamic>> get systemSettingsRef => firestore.collection('system').doc('settings');
 
@@ -171,19 +184,6 @@ class FirebaseService {
   Future<SystemSettings> getSystemSettings() async {
     final snap = await systemSettingsRef.get();
     return SystemSettings.fromMap(snap.data());
-  }
-
-  Future<void> _maybeCreateSecurityNotification(AccessLog log) async {
-    final settings = await getSystemSettings();
-    if (!settings.intrusionAlerts && !log.granted) return;
-    if (!settings.afterHoursAlerts || !settings.isAfterHours) return;
-    if (log.granted && !settings.globalLockdown) return;
-    await firestore.collection('notifications').add({
-      'title': log.isUnknownFace ? 'Unknown face after hours' : 'Access alert after hours',
-      'body': '${log.userName} at ${log.areaName}: ${log.reason}',
-      'read': false,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
   }
 
   Future<Map<String, int>> dashboardStats() async {

@@ -12,7 +12,7 @@ void main() {
   test('logo asset is bundled', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
 
-    final data = await rootBundle.load('assets/images/logo1.png');
+    final data = await rootBundle.load('assets/images/logo2.png');
 
     expect(data.lengthInBytes, greaterThan(0));
   });
@@ -21,7 +21,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: Image.asset('assets/images/logo1.png'),
+          body: Image.asset('assets/images/logo2.png'),
         ),
       ),
     );

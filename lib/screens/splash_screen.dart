@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shimmer/shimmer.dart';
 
 import '../providers/auth_provider.dart';
 import '../widgets/app_background.dart';
@@ -15,12 +14,17 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
   static const _logoHeroTag = 'facekey-logo';
+  late final AnimationController _scanController;
 
   @override
   void initState() {
     super.initState();
+    _scanController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat();
     Future.delayed(const Duration(milliseconds: 1400), () {
       if (!mounted) return;
       final auth = context.read<AuthProvider>();
@@ -29,44 +33,40 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   @override
+  void dispose() {
+    _scanController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        body: SafeArea(
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Center(
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: 1),
-                  duration: const Duration(milliseconds: 1250),
-                  curve: Curves.easeOutExpo,
-                  builder: (_, value, child) => Opacity(
-                    opacity: value.clamp(0, 1),
-                    child: Transform.scale(
-                      scale: .82 + (.18 * value),
-                      child: child,
-                    ),
-                  ),
-                  child: Hero(
-                    tag: _logoHeroTag,
-                    child: Shimmer.fromColors(
-                      baseColor: Colors.white,
-                      highlightColor: Theme.of(context).colorScheme.primary.withValues(alpha: .46),
-                      period: const Duration(milliseconds: 2100),
-                      child: Image.asset(
-                        'assets/images/logo1.png',
-                        width: 320.0,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.high,
-                      ),
-                    ),
+        body: Stack(
+          alignment: Alignment.center,
+          children: [
+            Center(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 1250),
+                curve: Curves.easeOutExpo,
+                builder: (_, value, child) => Opacity(
+                  opacity: value.clamp(0, 1),
+                  child: Transform.scale(
+                    scale: .82 + (.18 * value),
+                    child: child,
                   ),
                 ),
+                child: Hero(
+                  tag: _logoHeroTag,
+                  child: _BiometricLogoScan(controller: _scanController),
+                ),
               ),
-              Positioned(
-                bottom: 24,
+            ),
+            Positioned(
+              bottom: 24,
+              child: SafeArea(
                 child: Text(
                   'v1.0.0',
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
@@ -75,8 +75,115 @@ class _SplashScreenState extends State<SplashScreen> {
                       ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BiometricLogoScan extends StatelessWidget {
+  const _BiometricLogoScan({required this.controller});
+
+  final Animation<double> controller;
+
+  @override
+  Widget build(BuildContext context) {
+    const logoWidth = 320.0;
+    const logoHeight = 400.0;
+    return SizedBox(
+      width: logoWidth,
+      height: logoHeight,
+      child: ClipRect(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Image.asset(
+              'assets/images/logo2.png',
+              width: logoWidth,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+            ),
+            Positioned(
+              bottom: 18,
+              child: AnimatedBuilder(
+                animation: controller,
+                builder: (context, _) {
+                  final glow = .55 + (.45 * Curves.easeInOut.transform(controller.value));
+                  return Column(
+                    children: [
+                      Text(
+                        'Biometric Scan',
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                              color: const Color(0xFF22D3EE).withValues(alpha: glow),
+                              fontWeight: FontWeight.w900,
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: 132,
+                        height: 2,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF22D3EE).withValues(alpha: glow),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF22D3EE).withValues(alpha: glow),
+                              blurRadius: 16,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            AnimatedBuilder(
+              animation: controller,
+              builder: (context, _) {
+                final top = (logoHeight + 40) * Curves.easeInOutCubic.transform(controller.value) - 20;
+                return Positioned(
+                  top: top,
+                  left: 10,
+                  right: 10,
+                  child: IgnorePointer(
+                    child: Column(
+                      children: [
+                        Container(
+                          height: 2.5,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF22D3EE),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF22D3EE).withValues(alpha: .92),
+                                blurRadius: 18,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          height: 26,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                const Color(0xFF22D3EE).withValues(alpha: .24),
+                                const Color(0xFF22D3EE).withValues(alpha: 0),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
         ),
       ),
     );

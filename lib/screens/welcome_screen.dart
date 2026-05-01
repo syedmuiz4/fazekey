@@ -25,7 +25,7 @@ class WelcomeScreen extends StatelessWidget {
                 Hero(
                   tag: _logoHeroTag,
                   child: Image.asset(
-                    'assets/images/logo1.png',
+                    'assets/images/logo2.png',
                     width: 220.0,
                     fit: BoxFit.contain,
                     filterQuality: FilterQuality.high,

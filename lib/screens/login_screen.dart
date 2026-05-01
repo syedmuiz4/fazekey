@@ -53,17 +53,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       PrimaryButton(
                         label: 'Login',
                         loading: auth.loading,
-                        icon: Icons.login_rounded,
                         onPressed: () async {
                           if (!_form.currentState!.validate()) return;
                           final ok = await context.read<AuthProvider>().login(_email.text, _password.text);
                           if (ok && context.mounted) Navigator.pushReplacementNamed(context, DashboardScreen.route);
                         },
                       ),
-                      TextButton.icon(
+                      TextButton(
                         onPressed: () => Navigator.pushNamed(context, FaceLoginScreen.route),
-                        icon: const Icon(Icons.face_rounded),
-                        label: const Text('Login with Face'),
+                        child: const Text('Login with Face'),
                       ),
                     ],
                   ),
