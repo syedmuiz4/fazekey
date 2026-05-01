@@ -12,8 +12,16 @@ class AreaProvider extends ChangeNotifier {
   List<Area> areas = [];
   bool loading = false;
   String? error;
+  bool _sampleAreasRequested = false;
 
   void listen() {
+    if (!_sampleAreasRequested) {
+      _sampleAreasRequested = true;
+      _firebase.ensureSampleAreas().catchError((e) {
+        error = e.toString();
+        notifyListeners();
+      });
+    }
     _sub ??= _firebase.watchAreas().listen((value) {
       areas = value;
       notifyListeners();

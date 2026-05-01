@@ -2,11 +2,13 @@ import 'dart:io';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shimmer/shimmer.dart';
 
 import '../models/access_log.dart';
+import '../models/area.dart';
 import '../models/app_user.dart';
 import '../providers/area_provider.dart';
 import '../providers/auth_provider.dart';
@@ -21,6 +23,52 @@ import 'face_login_screen.dart';
 import 'face_registration_screen.dart';
 import 'notifications_screen.dart';
 import 'welcome_screen.dart';
+
+const _levels = [1, 2, 3];
+const _fallbackDepartments = [
+  'Software Engineering',
+  'Information Security',
+  'Multimedia',
+];
+
+List<String> _departmentsForLevel(List<Area> areas, int level) {
+  final floor = 'Level $level';
+  final departments = areas
+      .where((area) => area.active && area.floor.trim().toLowerCase() == floor.toLowerCase())
+      .expand((area) => area.allowedDepartments)
+      .map((department) => department.trim())
+      .where((department) => department.isNotEmpty)
+      .toSet()
+      .toList()
+    ..sort();
+  return departments.isEmpty ? _fallbackDepartments : departments;
+}
+
+List<String> _restrictedAreasForLevel(List<Area> areas, int level) {
+  final floor = 'Level $level';
+  final names = areas
+      .where((area) => area.active && area.floor.trim().toLowerCase() == floor.toLowerCase())
+      .map((area) => area.name.trim().isEmpty ? '$floor - Room ${area.roomNumber}' : area.name.trim())
+      .toSet()
+      .toList()
+    ..sort();
+  return names;
+}
+
+String? _firstDepartmentForLevel(List<Area> areas, int level) {
+  final options = _departmentsForLevel(areas, level);
+  return options.isEmpty ? null : options.first;
+}
+
+String? _firstRestrictedAreaForLevel(List<Area> areas, int level) {
+  final options = _restrictedAreasForLevel(areas, level);
+  return options.isEmpty ? null : options.first;
+}
+
+String? _selectedOption(List<String> options, String? selected) {
+  if (options.isEmpty) return null;
+  return selected != null && options.contains(selected) ? selected : options.first;
+}
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -87,6 +135,43 @@ class _HomeTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
+        const SizedBox(height: 4),
+        Center(
+          child: Image.asset(
+            'assets/images/logo1.png',
+            width: 220.0,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.high,
+          ),
+        ),
+        const SizedBox(height: 18),
+        ShaderMask(
+          blendMode: BlendMode.srcIn,
+          shaderCallback: (bounds) => const LinearGradient(
+            colors: [Color(0xFF22D3EE), Color(0xFFA855F7)],
+          ).createShader(bounds),
+          child: Text(
+            'FaceKey',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(
+              textStyle: Theme.of(context).textTheme.displaySmall,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 2.0,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Human-centric campus security with intelligent face access and real-time awareness.',
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            textStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .7),
+                ),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 18),
         _StatusStrip(
           lockdown: system.settings.globalLockdown,
           syncing: logProvider.syncing,
@@ -729,64 +814,12 @@ class _SettingsTab extends StatelessWidget {
   }
 
   Future<void> _showEditProfile(BuildContext context, AuthProvider auth, AppUser user) async {
-    final name = TextEditingController(text: user.name);
-    final department = TextEditingController(text: user.department);
-    final phone = TextEditingController(text: user.phone);
-    final room = TextEditingController(text: user.room);
-    final form = GlobalKey<FormState>();
-
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => Padding(
-        padding: EdgeInsets.fromLTRB(20, 4, 20, MediaQuery.viewInsetsOf(context).bottom + 24),
-        child: Form(
-          key: form,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Edit Profile', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
-              const SizedBox(height: 16),
-              TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Name'), validator: _required),
-              const SizedBox(height: 12),
-              TextFormField(controller: department, decoration: const InputDecoration(labelText: 'Department'), validator: _required),
-              const SizedBox(height: 12),
-              TextFormField(controller: phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone'), validator: _required),
-              const SizedBox(height: 12),
-              TextFormField(controller: room, decoration: const InputDecoration(labelText: 'Restricted Area'), validator: _required),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () async {
-                    if (!form.currentState!.validate()) return;
-                    final ok = await auth.updateProfile(
-                      name: name.text,
-                      department: department.text,
-                      phone: phone.text,
-                      room: room.text,
-                    );
-                    if (!context.mounted) return;
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(ok ? 'Profile updated.' : auth.error ?? 'Unable to update profile.')),
-                    );
-                  },
-                  child: const Text('Save Profile'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+      builder: (context) => _EditProfileSheet(auth: auth, user: user),
     );
-
-    name.dispose();
-    department.dispose();
-    phone.dispose();
-    room.dispose();
   }
 
   Future<void> _showHelpSupport(BuildContext context, LogProvider logs) {
@@ -822,8 +855,179 @@ class _SettingsTab extends StatelessWidget {
       ),
     );
   }
+}
+
+class _EditProfileSheet extends StatefulWidget {
+  const _EditProfileSheet({required this.auth, required this.user});
+
+  final AuthProvider auth;
+  final AppUser user;
+
+  @override
+  State<_EditProfileSheet> createState() => _EditProfileSheetState();
+}
+
+class _EditProfileSheetState extends State<_EditProfileSheet> {
+  final _form = GlobalKey<FormState>();
+  late final TextEditingController _name;
+  late final TextEditingController _phone;
+  late int _level;
+  String? _department;
+  String? _area;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.user.name);
+    _phone = TextEditingController(text: widget.user.phone);
+    _department = widget.user.department;
+    _area = widget.user.room;
+    _level = _levelFromRoom(widget.user.room) ?? 1;
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final areas = context.watch<AreaProvider>().areas;
+    final departmentOptions = _departmentsForLevel(areas, _level);
+    final selectedDepartment = _selectedOption(departmentOptions, _department);
+    final areaOptions = _restrictedAreasForLevel(areas, _level);
+    final selectedArea = _selectedOption(areaOptions, _area);
+    _syncSelection(department: selectedDepartment, area: selectedArea);
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(20, 4, 20, MediaQuery.viewInsetsOf(context).bottom + 24),
+      child: Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Edit Profile', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 16),
+            TextFormField(controller: _name, decoration: const InputDecoration(labelText: 'Name'), validator: _required),
+            const SizedBox(height: 12),
+            _LevelDropdown(
+              value: _level,
+              onChanged: (level) => setState(() {
+                _level = level;
+                _department = _firstDepartmentForLevel(areas, level);
+                _area = _firstRestrictedAreaForLevel(areas, level);
+              }),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              key: ValueKey('edit-department-$_level-$selectedDepartment'),
+              initialValue: selectedDepartment,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Department'),
+              validator: _required,
+              items: departmentOptions
+                  .map(
+                    (department) => DropdownMenuItem(
+                      value: department,
+                      child: Text(department, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _department = value),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(controller: _phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone'), validator: _required),
+            const SizedBox(height: 12),
+            if (selectedArea == null)
+              Text(
+                'No restricted areas configured for Level $_level.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              )
+            else
+              DropdownButtonFormField<String>(
+                key: ValueKey('edit-area-$_level-$selectedArea'),
+                initialValue: selectedArea,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Restricted Area'),
+                validator: _required,
+                items: areaOptions
+                    .map(
+                      (area) => DropdownMenuItem(
+                        value: area,
+                        child: Text(area, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() => _area = value),
+              ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: selectedArea == null
+                    ? null
+                    : () async {
+                        if (!_form.currentState!.validate()) return;
+                        final ok = await widget.auth.updateProfile(
+                          name: _name.text,
+                          department: selectedDepartment ?? '',
+                          phone: _phone.text,
+                          room: selectedArea,
+                        );
+                        if (!context.mounted) return;
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(ok ? 'Profile updated.' : widget.auth.error ?? 'Unable to update profile.')),
+                        );
+                      },
+                child: const Text('Save Profile'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
+
+  int? _levelFromRoom(String room) {
+    final match = RegExp(r'Level\s+(\d+)', caseSensitive: false).firstMatch(room);
+    return int.tryParse(match?.group(1) ?? '');
+  }
+
+  void _syncSelection({required String? department, required String? area}) {
+    if (_department == department && _area == area) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || (_department == department && _area == area)) return;
+      setState(() {
+        _department = department;
+        _area = area;
+      });
+    });
+  }
+}
+
+class _LevelDropdown extends StatelessWidget {
+  const _LevelDropdown({required this.value, required this.onChanged});
+
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<int>(
+      initialValue: value,
+      decoration: const InputDecoration(labelText: 'Level'),
+      items: _levels.map((level) => DropdownMenuItem(value: level, child: Text('Level $level'))).toList(),
+      onChanged: (level) {
+        if (level != null) onChanged(level);
+      },
+    );
+  }
 }
 
 class _FaceAvatar extends StatelessWidget {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../widgets/app_background.dart';
 import '../widgets/primary_button.dart';
@@ -24,23 +25,38 @@ class WelcomeScreen extends StatelessWidget {
                 Hero(
                   tag: _logoHeroTag,
                   child: Image.asset(
-                    'assets/images/logo.png',
+                    'assets/images/logo1.png',
                     width: 220.0,
                     fit: BoxFit.contain,
                     filterQuality: FilterQuality.high,
                   ),
                 ),
                 const SizedBox(height: 18),
-                Text(
-                  'FaceKey',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.displayLarge?.copyWith(fontWeight: FontWeight.w900),
+                ShaderMask(
+                  blendMode: BlendMode.srcIn,
+                  shaderCallback: (bounds) => const LinearGradient(
+                    colors: [Color(0xFF22D3EE), Color(0xFFA855F7)],
+                  ).createShader(bounds),
+                  child: Text(
+                    'FaceKey',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      textStyle: Theme.of(context).textTheme.displayLarge,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2.0,
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Text(
                   'A smart campus access control console for secure face-first entry.',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge,
+                  style: GoogleFonts.inter(
+                    textStyle: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .7),
+                        ),
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
                 const Spacer(),
                 PrimaryButton(

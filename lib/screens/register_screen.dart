@@ -18,19 +18,13 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  static const _departments = [
-    'Software Engineering',
-    'Information Security and Web Technology',
-    'Multimedia',
-  ];
-
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _phone = TextEditingController();
-  String _department = _departments.first;
   int _level = 1;
+  String? _department;
   String? _area;
 
   @override
@@ -54,9 +48,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final areas = context.watch<AreaProvider>().areas;
+    final departmentOptions = _departmentsForLevel(areas, _level);
+    final selectedDepartment = _selectedOption(departmentOptions, _department);
     final areaOptions = _restrictedAreasForLevel(areas, _level);
-    final selectedArea = _selectedArea(areaOptions);
-    _syncSelectedArea(selectedArea);
+    final selectedArea = _selectedOption(areaOptions, _area);
+    _syncSelection(department: selectedDepartment, area: selectedArea);
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -77,40 +73,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       const SizedBox(height: 12),
                       TextFormField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password'), validator: _required),
                       const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue: _department,
-                              isExpanded: true,
-                              decoration: const InputDecoration(labelText: 'Department'),
-                              selectedItemBuilder: (context) => _departments
-                                  .map(
-                                    (d) => Text(
-                                      d,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  )
-                                  .toList(),
-                              items: _departments
-                                  .map(
-                                    (d) => DropdownMenuItem(
-                                      value: d,
-                                      child: Text(
-                                        d,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (value) {
-                                if (value != null) setState(() => _department = value);
-                              },
-                            ),
-                          ),
-                        ],
+                      DropdownButtonFormField<String>(
+                        key: ValueKey('register-department-$_level-$selectedDepartment'),
+                        initialValue: selectedDepartment,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: 'Department'),
+                        validator: _required,
+                        items: departmentOptions
+                            .map(
+                              (department) => DropdownMenuItem(
+                                value: department,
+                                child: Text(department, maxLines: 1, overflow: TextOverflow.ellipsis),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) => setState(() => _department = value),
                       ),
                       const SizedBox(height: 12),
                       TextFormField(controller: _phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone'), validator: _required),
@@ -122,6 +99,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         textFor: (level) => 'Level $level',
                         onChanged: (level) => setState(() {
                           _level = level;
+                          _department = _firstDepartmentForLevel(areas, level);
                           _area = _firstRestrictedAreaForLevel(areas, level);
                         }),
                       ),
@@ -132,11 +110,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                         )
                       else
-                        _TextSelector<String>(
-                          label: 'Restricted Area',
-                          value: selectedArea,
-                          options: areaOptions,
-                          textFor: (area) => area,
+                        DropdownButtonFormField<String>(
+                          key: ValueKey('register-area-$_level-$selectedArea'),
+                          initialValue: selectedArea,
+                          isExpanded: true,
+                          decoration: const InputDecoration(labelText: 'Restricted Area'),
+                          validator: _required,
+                          items: areaOptions
+                              .map(
+                                (area) => DropdownMenuItem(
+                                  value: area,
+                                  child: Text(area, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                ),
+                              )
+                              .toList(),
                           onChanged: (area) => setState(() => _area = area),
                         ),
                       if (auth.error != null) ...[
@@ -159,7 +146,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 name: _name.text,
                                 email: _email.text,
                                 password: _password.text,
-                                department: _department,
+                                department: selectedDepartment ?? '',
                                 phone: _phone.text,
                                 room: selectedArea,
                               );
@@ -179,6 +166,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
 
+  List<String> _departmentsForLevel(List<Area> areas, int level) {
+    final floor = 'Level $level';
+    final departments = areas
+        .where((area) => area.active && area.floor.trim().toLowerCase() == floor.toLowerCase())
+        .expand((area) => area.allowedDepartments)
+        .map((department) => department.trim())
+        .where((department) => department.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return departments.isEmpty ? _fallbackDepartments : departments;
+  }
+
   List<String> _restrictedAreasForLevel(List<Area> areas, int level) {
     final floor = 'Level $level';
     final names = areas
@@ -195,17 +195,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return options.isEmpty ? null : options.first;
   }
 
-  String? _selectedArea(List<String> options) {
-    if (options.isEmpty) return null;
-    return _area != null && options.contains(_area) ? _area : options.first;
+  String? _firstDepartmentForLevel(List<Area> areas, int level) {
+    final options = _departmentsForLevel(areas, level);
+    return options.isEmpty ? null : options.first;
   }
 
-  void _syncSelectedArea(String? selectedArea) {
-    if (_area == selectedArea) return;
+  String? _selectedOption(List<String> options, String? selected) {
+    if (options.isEmpty) return null;
+    return selected != null && options.contains(selected) ? selected : options.first;
+  }
+
+  void _syncSelection({required String? department, required String? area}) {
+    if (_department == department && _area == area) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _area != selectedArea) setState(() => _area = selectedArea);
+      if (!mounted || (_department == department && _area == area)) return;
+      setState(() {
+        _department = department;
+        _area = area;
+      });
     });
   }
+
+  static const _fallbackDepartments = [
+    'Software Engineering',
+    'Information Security',
+    'Multimedia',
+  ];
 }
 
 class _TextSelector<T> extends StatelessWidget {

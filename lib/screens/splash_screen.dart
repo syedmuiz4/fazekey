@@ -39,19 +39,25 @@ class _SplashScreenState extends State<SplashScreen> {
             children: [
               Center(
                 child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: .9, end: 1),
-                  duration: const Duration(milliseconds: 1100),
-                  curve: Curves.easeOutCubic,
-                  builder: (_, value, child) => Transform.scale(scale: value, child: child),
+                  tween: Tween(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 1250),
+                  curve: Curves.easeOutExpo,
+                  builder: (_, value, child) => Opacity(
+                    opacity: value.clamp(0, 1),
+                    child: Transform.scale(
+                      scale: .82 + (.18 * value),
+                      child: child,
+                    ),
+                  ),
                   child: Hero(
                     tag: _logoHeroTag,
                     child: Shimmer.fromColors(
                       baseColor: Colors.white,
-                      highlightColor: Theme.of(context).colorScheme.primary.withValues(alpha: .38),
-                      period: const Duration(milliseconds: 1900),
+                      highlightColor: Theme.of(context).colorScheme.primary.withValues(alpha: .46),
+                      period: const Duration(milliseconds: 2100),
                       child: Image.asset(
-                        'assets/images/logo.png',
-                        width: 240.0,
+                        'assets/images/logo1.png',
+                        width: 320.0,
                         fit: BoxFit.contain,
                         filterQuality: FilterQuality.high,
                       ),

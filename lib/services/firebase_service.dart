@@ -104,6 +104,16 @@ class FirebaseService {
 
   Future<void> addArea(Area area) => firestore.collection('areas').add(area.toMap());
 
+  Future<void> ensureSampleAreas() async {
+    for (final entry in _sampleAreas.entries) {
+      final ref = firestore.collection('areas').doc(entry.key);
+      final snap = await ref.get();
+      if (!snap.exists) {
+        await ref.set(entry.value.toMap());
+      }
+    }
+  }
+
   Future<void> updateArea(Area area) => firestore.collection('areas').doc(area.id).set(area.toMap(), SetOptions(merge: true));
 
   Future<void> updateAreaOccupancy(String areaId, int delta) async {
@@ -190,4 +200,33 @@ class FirebaseService {
       'areasMonitored': areas.count ?? 0,
     };
   }
+
+  static final Map<String, Area> _sampleAreas = {
+    'sample_level_1_access_lab': Area(
+      id: 'sample_level_1_access_lab',
+      name: 'Level 1 - Access Lab',
+      location: 'FSKTM',
+      floor: 'Level 1',
+      roomNumber: '31',
+      active: true,
+      createdAt: DateTime(2026),
+      allowedDepartments: const ['Software Engineering', 'Information Security'],
+      allowedRoles: const ['Admin', 'Security', 'Staff'],
+      currentOccupancy: 0,
+      capacity: 25,
+    ),
+    'sample_level_2_research_suite': Area(
+      id: 'sample_level_2_research_suite',
+      name: 'Level 2 - Research Suite',
+      location: 'FSKTM',
+      floor: 'Level 2',
+      roomNumber: '32',
+      active: true,
+      createdAt: DateTime(2026, 1, 2),
+      allowedDepartments: const ['Multimedia', 'Information Security'],
+      allowedRoles: const ['Admin', 'Security', 'Staff'],
+      currentOccupancy: 0,
+      capacity: 25,
+    ),
+  };
 }
