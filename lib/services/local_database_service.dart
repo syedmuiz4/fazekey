@@ -47,27 +47,32 @@ class LocalDatabaseService {
     required List<double> embedding,
   }) async {
     final db = await database;
-    await db.insert(
-      'faces',
-      {
-        'userId': userId,
-        'name': name,
-        'embedding': jsonEncode(embedding),
-        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('faces', {
+      'userId': userId,
+      'name': name,
+      'embedding': jsonEncode(embedding),
+      'updatedAt': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<LocalFaceMatch?> findNearestFace(List<double> embedding, {double threshold = 1.05}) async {
+  Future<LocalFaceMatch?> findNearestFace(
+    List<double> embedding, {
+    double threshold = 1.05,
+  }) async {
     final db = await database;
     final rows = await db.query('faces');
     LocalFaceMatch? best;
     for (final row in rows) {
-      final stored = (jsonDecode(row['embedding'] as String) as List).cast<num>().map((e) => e.toDouble()).toList();
+      final stored = (jsonDecode(row['embedding'] as String) as List)
+          .cast<num>()
+          .map((e) => e.toDouble())
+          .toList();
       final distance = euclideanDistance(embedding, stored);
       if (best == null || distance < best.distance) {
-        best = LocalFaceMatch(userId: row['userId'] as String, distance: distance);
+        best = LocalFaceMatch(
+          userId: row['userId'] as String,
+          distance: distance,
+        );
       }
     }
     if (best == null || best.distance > threshold) return null;
@@ -76,11 +81,13 @@ class LocalDatabaseService {
 
   Future<void> queueLog(AccessLog log) async {
     final db = await database;
-    await db.insert(
-      'pending_logs',
-      {'id': log.id, 'payload': jsonEncode(log.toMap()..['timestamp'] = log.timestamp.toIso8601String()), 'createdAt': DateTime.now().millisecondsSinceEpoch},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('pending_logs', {
+      'id': log.id,
+      'payload': jsonEncode(
+        log.toMap()..['timestamp'] = log.timestamp.toIso8601String(),
+      ),
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<List<Map<String, dynamic>>> pendingLogs() async {

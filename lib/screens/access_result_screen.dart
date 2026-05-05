@@ -14,7 +14,9 @@ class AccessResultScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>? ?? {};
+    final args =
+        ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>? ??
+        {};
     final user = args['user'] as AppUser?;
     final log = args['log'] as AccessLog?;
     final granted = user != null;
@@ -31,28 +33,62 @@ class AccessResultScreen extends StatelessWidget {
                   tween: Tween(begin: .6, end: 1),
                   duration: const Duration(milliseconds: 650),
                   curve: Curves.elasticOut,
-                  builder: (_, scale, child) => Transform.scale(scale: scale, child: child),
+                  builder: (_, scale, child) =>
+                      Transform.scale(scale: scale, child: child),
                   child: CircleAvatar(
                     radius: 62,
-                    backgroundColor: granted ? const Color(0xFF00E5A8) : Theme.of(context).colorScheme.error,
-                    child: Icon(granted ? Icons.check_rounded : Icons.close_rounded, color: Colors.white, size: 72),
+                    backgroundColor: granted
+                        ? const Color(0xFF00E5A8)
+                        : Theme.of(context).colorScheme.error,
+                    child: Icon(
+                      granted ? Icons.check_rounded : Icons.close_rounded,
+                      color: Colors.white,
+                      size: 72,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 24),
-                Text(granted ? 'Access Granted' : 'Access Denied', style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w900)),
+                Text(
+                  granted ? 'Access Granted' : 'Access Denied',
+                  style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
                 const SizedBox(height: 18),
                 GlassCard(
                   child: Column(
                     children: [
-                      Text(user?.name ?? log?.userName ?? 'Unknown face', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+                      Text(
+                        user?.name ?? log?.userName ?? 'Unknown face',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                       const SizedBox(height: 8),
-                      Text(granted ? '${user.department} - Room ${user.room}' : (log?.reason ?? 'Face not recognized')),
+                      Text(
+                        granted
+                            ? '${user.department} - Room ${user.room}'
+                            : (log?.reason ?? 'Face not recognized'),
+                      ),
                     ],
                   ),
                 ),
                 const Spacer(),
-                PrimaryButton(label: 'Back to Dashboard', icon: Icons.dashboard_rounded, onPressed: () => Navigator.pushReplacementNamed(context, DashboardScreen.route)),
-                TextButton(onPressed: () => Navigator.pushReplacementNamed(context, FaceLoginScreen.route), child: const Text('Scan another face')),
+                PrimaryButton(
+                  label: 'Back to Dashboard',
+                  icon: Icons.dashboard_rounded,
+                  onPressed: () => Navigator.pushReplacementNamed(
+                    context,
+                    DashboardScreen.route,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pushReplacementNamed(
+                    context,
+                    FaceLoginScreen.route,
+                  ),
+                  child: const Text('Scan another face'),
+                ),
               ],
             ),
           ),

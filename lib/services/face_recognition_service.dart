@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
@@ -21,18 +23,23 @@ class FaceRecognitionService {
   FaceRecognitionService(this.localDb);
 
   final LocalDatabaseService localDb;
-  // ignore: deprecated_member_use
-  final FaceDetector _detector = GoogleMlKit.vision.faceDetector(
-    FaceDetectorOptions(
-      performanceMode: FaceDetectorMode.accurate,
-      enableContours: true,
-      enableLandmarks: true,
-      enableClassification: true,
-    ),
-  );
   Interpreter? _faceNetInterpreter;
   Interpreter? _blazeFaceInterpreter;
+  FaceDetector? _detector;
   Future<void>? _initializing;
+  Future<void> _detectorQueue = Future.value();
+  DateTime? _lastDetectorStartedAt;
+
+  FaceDetector get _activeDetector =>
+      // ignore: deprecated_member_use
+      _detector ??= GoogleMlKit.vision.faceDetector(
+        FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.accurate,
+          enableContours: true,
+          enableLandmarks: true,
+          enableClassification: true,
+        ),
+      );
 
   Future<void> initialize() async {
     if (_faceNetInterpreter != null && _blazeFaceInterpreter != null) return;
@@ -49,7 +56,9 @@ class FaceRecognitionService {
     Interpreter? faceNet;
     Interpreter? blazeFace;
     try {
-      final faceNetBuffer = await _loadBundledModelBuffer(FaceModelConfig.assetPath);
+      final faceNetBuffer = await _loadBundledModelBuffer(
+        FaceModelConfig.assetPath,
+      );
       faceNet = Interpreter.fromBuffer(faceNetBuffer);
       _validateFaceNetModel(faceNet);
 
@@ -113,7 +122,8 @@ class FaceRecognitionService {
       );
     }
 
-    final hasTfliteIdentifier = bytes[4] == 0x54 &&
+    final hasTfliteIdentifier =
+        bytes[4] == 0x54 &&
         bytes[5] == 0x46 &&
         bytes[6] == 0x4C &&
         bytes[7] == 0x33;
@@ -127,12 +137,14 @@ class FaceRecognitionService {
   void _validateFaceNetModel(Interpreter interpreter) {
     final inputShape = interpreter.getInputTensor(0).shape;
     final outputShape = interpreter.getOutputTensor(0).shape;
-    final hasExpectedInput = inputShape.length == 4 &&
+    final hasExpectedInput =
+        inputShape.length == 4 &&
         inputShape[0] == 1 &&
         inputShape[1] == FaceModelConfig.inputSize &&
         inputShape[2] == FaceModelConfig.inputSize &&
         inputShape[3] == 3;
-    final hasExpectedOutput = outputShape.length == 2 &&
+    final hasExpectedOutput =
+        outputShape.length == 2 &&
         outputShape[0] == 1 &&
         outputShape[1] == FaceModelConfig.embeddingSize;
 
@@ -145,72 +157,93 @@ class FaceRecognitionService {
   }
 
   Future<List<Face>> detectFaces(XFile file) async {
-    final input = InputImage.fromFilePath(file.path);
-    try {
-      return await _detector.processImage(input).timeout(const Duration(seconds: 8));
-    } on TimeoutException {
-      throw const FaceRecognitionException('Face detection timed out. Try brighter lighting and keep your face centered.');
+    return _runDetectorTask(() async {
+      final input = InputImage.fromFilePath(file.path);
+      try {
+        return await _activeDetector
+            .processImage(input)
+            .timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        throw const FaceRecognitionException(
+          'Face detection timed out. Try brighter lighting and keep your face centered.',
+        );
+      }
+    });
+  }
+
+  Future<T> _runDetectorTask<T>(Future<T> Function() task) {
+    final completer = Completer<T>();
+    _detectorQueue = _detectorQueue.catchError((_) {}).then((_) async {
+      if (completer.isCompleted) return;
+      try {
+        await _throttleDetector();
+        completer.complete(await task());
+      } catch (e, stackTrace) {
+        completer.completeError(e, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  Future<void> _throttleDetector() async {
+    final lastStartedAt = _lastDetectorStartedAt;
+    if (lastStartedAt != null) {
+      final elapsed = DateTime.now().difference(lastStartedAt);
+      const minimumGap = Duration(milliseconds: 500);
+      if (elapsed < minimumGap) {
+        await Future<void>.delayed(minimumGap - elapsed);
+      }
     }
+    _lastDetectorStartedAt = DateTime.now();
   }
 
   Future<void> validateLiveness(XFile file) async {
     final faces = await detectFaces(file);
+    _validateSingleLiveFace(faces);
+  }
+
+  Face _validateSingleLiveFace(List<Face> faces) {
     if (faces.isEmpty) {
-      throw const FaceRecognitionException('No live face detected. Center your face in the guide.');
+      throw const FaceRecognitionException(
+        'No live face detected. Center your face in the guide.',
+      );
     }
     if (faces.length > 1) {
-      throw const FaceRecognitionException('Multiple faces detected. Scan one person at a time.');
+      throw const FaceRecognitionException(
+        'Multiple faces detected. Scan one person at a time.',
+      );
     }
     final face = faces.first;
     final leftOpen = face.leftEyeOpenProbability;
     final rightOpen = face.rightEyeOpenProbability;
-    final hasOpenEyes = leftOpen == null || rightOpen == null || (leftOpen > .35 && rightOpen > .35);
+    final hasOpenEyes =
+        leftOpen == null ||
+        rightOpen == null ||
+        (leftOpen > .35 && rightOpen > .35);
     final headY = (face.headEulerAngleY ?? 0).abs();
     final headZ = (face.headEulerAngleZ ?? 0).abs();
     final hasNaturalPose = headY < 25 && headZ < 20;
     if (!hasOpenEyes || !hasNaturalPose) {
-      throw const FaceRecognitionException('Liveness check failed. Keep your face upright with both eyes visible.');
+      throw const FaceRecognitionException(
+        'Liveness check failed. Keep your face upright with both eyes visible.',
+      );
     }
+    return face;
   }
 
   Future<List<double>> embeddingFromFile(XFile file) async {
     await initialize();
-    await validateLiveness(file);
     final faces = await detectFaces(file);
-    if (faces.isEmpty) {
-      throw const FaceRecognitionException('No face detected. Center your face in the guide.');
-    }
-    if (faces.length > 1) {
-      throw const FaceRecognitionException('Multiple faces detected. Use one person at a time.');
-    }
-    final bytes = await file.readAsBytes();
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) {
-      throw const FaceRecognitionException('Could not read camera frame.');
-    }
-    final face = faces.first.boundingBox;
-    final left = face.left.clamp(0, decoded.width - 1).toInt();
-    final top = face.top.clamp(0, decoded.height - 1).toInt();
-    final width = face.width.clamp(1, decoded.width - left).toInt();
-    final height = face.height.clamp(1, decoded.height - top).toInt();
-    final cropped = img.copyCrop(decoded, x: left, y: top, width: width, height: height);
-    final resized = img.copyResize(
-      cropped,
-      width: FaceModelConfig.inputSize,
-      height: FaceModelConfig.inputSize,
-    );
-    final input = List.generate(
-      1,
-      (_) => List.generate(
-        FaceModelConfig.inputSize,
-        (y) => List.generate(FaceModelConfig.inputSize, (x) {
-          final pixel = resized.getPixel(x, y);
-          return [
-            (pixel.r - 127.5) / 128.0,
-            (pixel.g - 127.5) / 128.0,
-            (pixel.b - 127.5) / 128.0,
-          ];
-        }),
+    final face = _validateSingleLiveFace(faces).boundingBox;
+    final input = await Isolate.run(
+      () => _prepareFaceNetInput(
+        _FaceCropRequest(
+          path: file.path,
+          left: face.left,
+          top: face.top,
+          width: face.width,
+          height: face.height,
+        ),
       ),
     );
     final output = List.generate(
@@ -223,7 +256,9 @@ class FaceRecognitionService {
 
   Future<List<double>> averageEmbeddings(List<XFile> captures) async {
     if (captures.length < 3) {
-      throw const FaceRecognitionException('Capture three face samples before registering.');
+      throw const FaceRecognitionException(
+        'Capture three face samples before registering.',
+      );
     }
     final embeddings = <List<double>>[];
     for (final file in captures) {
@@ -249,11 +284,72 @@ class FaceRecognitionService {
     return input.map((e) => e / norm).toList();
   }
 
+  Future<void> closeDetector() async {
+    await _detectorQueue.catchError((_) {});
+    await _detector?.close();
+    _detector = null;
+    _lastDetectorStartedAt = null;
+  }
+
   Future<void> close() async {
-    await _detector.close();
+    await closeDetector();
     _faceNetInterpreter?.close();
     _blazeFaceInterpreter?.close();
     _faceNetInterpreter = null;
     _blazeFaceInterpreter = null;
   }
+}
+
+class _FaceCropRequest {
+  const _FaceCropRequest({
+    required this.path,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+  });
+
+  final String path;
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+}
+
+List<List<List<List<double>>>> _prepareFaceNetInput(_FaceCropRequest request) {
+  final decoded = img.decodeImage(File(request.path).readAsBytesSync());
+  if (decoded == null) {
+    throw const FaceRecognitionException('Could not read camera frame.');
+  }
+
+  final left = request.left.clamp(0, decoded.width - 1).toInt();
+  final top = request.top.clamp(0, decoded.height - 1).toInt();
+  final width = request.width.clamp(1, decoded.width - left).toInt();
+  final height = request.height.clamp(1, decoded.height - top).toInt();
+  final cropped = img.copyCrop(
+    decoded,
+    x: left,
+    y: top,
+    width: width,
+    height: height,
+  );
+  final resized = img.copyResize(
+    cropped,
+    width: FaceModelConfig.inputSize,
+    height: FaceModelConfig.inputSize,
+  );
+  return List.generate(
+    1,
+    (_) => List.generate(
+      FaceModelConfig.inputSize,
+      (y) => List.generate(FaceModelConfig.inputSize, (x) {
+        final pixel = resized.getPixel(x, y);
+        return [
+          (pixel.r - 127.5) / 128.0,
+          (pixel.g - 127.5) / 128.0,
+          (pixel.b - 127.5) / 128.0,
+        ];
+      }),
+    ),
+  );
 }

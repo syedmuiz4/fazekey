@@ -22,13 +22,16 @@ class AreaProvider extends ChangeNotifier {
         notifyListeners();
       });
     }
-    _sub ??= _firebase.watchAreas().listen((value) {
-      areas = value;
-      notifyListeners();
-    }, onError: (e) {
-      error = e.toString();
-      notifyListeners();
-    });
+    _sub ??= _firebase.watchAreas().listen(
+      (value) {
+        areas = value;
+        notifyListeners();
+      },
+      onError: (e) {
+        error = e.toString();
+        notifyListeners();
+      },
+    );
   }
 
   Future<void> addArea(Area area) async {

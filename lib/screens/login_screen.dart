@@ -33,21 +33,45 @@ class _LoginScreenState extends State<LoginScreen> {
           child: ListView(
             padding: const EdgeInsets.all(24),
             children: [
-              Text('Welcome back', style: Theme.of(context).textTheme.headlineLarge?.copyWith(fontWeight: FontWeight.w900)),
+              Text(
+                'Welcome back',
+                style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
               const SizedBox(height: 8),
-              Text('Sign in to manage secure campus access.', style: Theme.of(context).textTheme.bodyLarge),
+              Text(
+                'Sign in to manage secure campus access.',
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
               const SizedBox(height: 28),
               GlassCard(
                 child: Form(
                   key: _form,
                   child: Column(
                     children: [
-                      TextFormField(controller: _email, decoration: const InputDecoration(labelText: 'Email'), validator: _required),
+                      TextFormField(
+                        controller: _email,
+                        decoration: const InputDecoration(labelText: 'Email'),
+                        validator: _required,
+                      ),
                       const SizedBox(height: 14),
-                      TextFormField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password'), validator: _required),
+                      TextFormField(
+                        controller: _password,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Password',
+                        ),
+                        validator: _required,
+                      ),
                       if (auth.error != null) ...[
                         const SizedBox(height: 12),
-                        Text(auth.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                        Text(
+                          auth.error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
                       ],
                       const SizedBox(height: 20),
                       PrimaryButton(
@@ -55,12 +79,21 @@ class _LoginScreenState extends State<LoginScreen> {
                         loading: auth.loading,
                         onPressed: () async {
                           if (!_form.currentState!.validate()) return;
-                          final ok = await context.read<AuthProvider>().login(_email.text, _password.text);
-                          if (ok && context.mounted) Navigator.pushReplacementNamed(context, DashboardScreen.route);
+                          final ok = await context.read<AuthProvider>().login(
+                            _email.text,
+                            _password.text,
+                          );
+                          if (ok && context.mounted) {
+                            Navigator.pushReplacementNamed(
+                              context,
+                              DashboardScreen.route,
+                            );
+                          }
                         },
                       ),
                       TextButton(
-                        onPressed: () => Navigator.pushNamed(context, FaceLoginScreen.route),
+                        onPressed: () =>
+                            Navigator.pushNamed(context, FaceLoginScreen.route),
                         child: const Text('Login with Face'),
                       ),
                     ],
@@ -69,7 +102,8 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 12),
               TextButton(
-                onPressed: () => Navigator.pushNamed(context, RegisterScreen.route),
+                onPressed: () =>
+                    Navigator.pushNamed(context, RegisterScreen.route),
                 child: const Text('Create administrator account'),
               ),
             ],
@@ -79,5 +113,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
+  String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
 }

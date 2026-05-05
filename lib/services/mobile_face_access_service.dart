@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
+import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' show Rect;
 
@@ -19,38 +22,40 @@ class RegisteredFaceMatch {
 }
 
 class FaceAccessResult {
-  const FaceAccessResult({
-    required this.granted,
-    this.match,
-  });
+  const FaceAccessResult({required this.granted, this.match});
 
   final bool granted;
   final RegisteredFaceMatch? match;
 }
 
 class MobileFaceAccessService {
-  MobileFaceAccessService({
-    FirebaseFirestore? firestore,
-    this.threshold = 0.7,
-  })  : _firestore = firestore ?? FirebaseFirestore.instance,
-        super();
+  MobileFaceAccessService({FirebaseFirestore? firestore, this.threshold = 0.7})
+    : _firestore = firestore ?? FirebaseFirestore.instance,
+      super();
 
   final FirebaseFirestore _firestore;
   final double threshold;
+  Future<void> _detectorQueue = Future.value();
+  DateTime? _lastDetectorStartedAt;
 
-  // ignore: deprecated_member_use
-  final FaceDetector _faceDetector = GoogleMlKit.vision.faceDetector(
-    FaceDetectorOptions(
-      performanceMode: FaceDetectorMode.accurate,
-      enableLandmarks: true,
-      enableContours: false,
-      enableClassification: false,
-    ),
-  );
+  FaceDetector? _faceDetector;
+
+  FaceDetector get _activeFaceDetector =>
+      // ignore: deprecated_member_use
+      _faceDetector ??= GoogleMlKit.vision.faceDetector(
+        FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.accurate,
+          enableLandmarks: true,
+          enableContours: false,
+          enableClassification: false,
+        ),
+      );
 
   Future<Rect> getFaceBoundingBox(String imagePath) async {
-    final inputImage = InputImage.fromFilePath(imagePath);
-    final faces = await _faceDetector.processImage(inputImage);
+    final faces = await _runDetectorTask(() {
+      final inputImage = InputImage.fromFilePath(imagePath);
+      return _activeFaceDetector.processImage(inputImage);
+    });
 
     if (faces.isEmpty) {
       throw Exception('No face detected.');
@@ -64,39 +69,43 @@ class MobileFaceAccessService {
 
   Future<Float32List> cropFaceToMobileFaceNetInput(String imagePath) async {
     final boundingBox = await getFaceBoundingBox(imagePath);
-    final bytes = await img.decodeImageFile(imagePath);
-
-    if (bytes == null) {
-      throw Exception('Could not decode image.');
-    }
-
-    final left = boundingBox.left.clamp(0, bytes.width - 1).toInt();
-    final top = boundingBox.top.clamp(0, bytes.height - 1).toInt();
-    final width = boundingBox.width.clamp(1, bytes.width - left).toInt();
-    final height = boundingBox.height.clamp(1, bytes.height - top).toInt();
-
-    final cropped = img.copyCrop(
-      bytes,
-      x: left,
-      y: top,
-      width: width,
-      height: height,
+    return Isolate.run(
+      () => _cropFaceToMobileFaceNetInput(
+        _MobileFaceCropRequest(
+          imagePath: imagePath,
+          left: boundingBox.left,
+          top: boundingBox.top,
+          width: boundingBox.width,
+          height: boundingBox.height,
+        ),
+      ),
     );
-    final resized = img.copyResize(cropped, width: 112, height: 112);
+  }
 
-    final input = Float32List(1 * 112 * 112 * 3);
-    var index = 0;
+  Future<T> _runDetectorTask<T>(Future<T> Function() task) {
+    final completer = Completer<T>();
+    _detectorQueue = _detectorQueue.catchError((_) {}).then((_) async {
+      if (completer.isCompleted) return;
+      try {
+        await _throttleDetector();
+        completer.complete(await task());
+      } catch (e, stackTrace) {
+        completer.completeError(e, stackTrace);
+      }
+    });
+    return completer.future;
+  }
 
-    for (var y = 0; y < 112; y++) {
-      for (var x = 0; x < 112; x++) {
-        final pixel = resized.getPixel(x, y);
-        input[index++] = (pixel.r - 127.5) / 128.0;
-        input[index++] = (pixel.g - 127.5) / 128.0;
-        input[index++] = (pixel.b - 127.5) / 128.0;
+  Future<void> _throttleDetector() async {
+    final lastStartedAt = _lastDetectorStartedAt;
+    if (lastStartedAt != null) {
+      final elapsed = DateTime.now().difference(lastStartedAt);
+      const minimumGap = Duration(milliseconds: 500);
+      if (elapsed < minimumGap) {
+        await Future<void>.delayed(minimumGap - elapsed);
       }
     }
-
-    return input;
+    _lastDetectorStartedAt = DateTime.now();
   }
 
   Future<List<RegisteredFaceMatch>> loadRegisteredFaceDistances(
@@ -172,7 +181,62 @@ class MobileFaceAccessService {
     return math.sqrt(sum);
   }
 
-  void dispose() {
-    _faceDetector.close();
+  Future<void> dispose() async {
+    await _detectorQueue.catchError((_) {});
+    await _faceDetector?.close();
+    _faceDetector = null;
+    _lastDetectorStartedAt = null;
   }
+}
+
+class _MobileFaceCropRequest {
+  const _MobileFaceCropRequest({
+    required this.imagePath,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+  });
+
+  final String imagePath;
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+}
+
+Float32List _cropFaceToMobileFaceNetInput(_MobileFaceCropRequest request) {
+  final bytes = img.decodeImage(File(request.imagePath).readAsBytesSync());
+
+  if (bytes == null) {
+    throw Exception('Could not decode image.');
+  }
+
+  final left = request.left.clamp(0, bytes.width - 1).toInt();
+  final top = request.top.clamp(0, bytes.height - 1).toInt();
+  final width = request.width.clamp(1, bytes.width - left).toInt();
+  final height = request.height.clamp(1, bytes.height - top).toInt();
+
+  final cropped = img.copyCrop(
+    bytes,
+    x: left,
+    y: top,
+    width: width,
+    height: height,
+  );
+  final resized = img.copyResize(cropped, width: 112, height: 112);
+
+  final input = Float32List(1 * 112 * 112 * 3);
+  var index = 0;
+
+  for (var y = 0; y < 112; y++) {
+    for (var x = 0; x < 112; x++) {
+      final pixel = resized.getPixel(x, y);
+      input[index++] = (pixel.r - 127.5) / 128.0;
+      input[index++] = (pixel.g - 127.5) / 128.0;
+      input[index++] = (pixel.b - 127.5) / 128.0;
+    }
+  }
+
+  return input;
 }

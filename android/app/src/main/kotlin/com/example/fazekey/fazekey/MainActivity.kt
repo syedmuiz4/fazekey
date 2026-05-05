@@ -1,4 +1,4 @@
-package com.example.fazekey.fazekey
+package com.fazekey.app
 
 import io.flutter.embedding.android.FlutterActivity
 

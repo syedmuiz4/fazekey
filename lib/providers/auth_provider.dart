@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/app_user.dart';
@@ -9,6 +11,7 @@ class AuthProvider extends ChangeNotifier {
 
   final FirebaseService _firebase;
   final LocalDatabaseService _localDb;
+  StreamSubscription<AppUser?>? _profileSub;
   AppUser? user;
   bool loading = true;
   bool darkMode = true;
@@ -16,11 +19,38 @@ class AuthProvider extends ChangeNotifier {
 
   bool get isAuthenticated => user != null;
 
+  bool get hasSignedInAccount => _firebase.currentUserId != null;
+
+  String? get passwordResetEmail {
+    final accountEmail = _firebase.currentUserEmail?.trim();
+    if (accountEmail != null && accountEmail.isNotEmpty) return accountEmail;
+    final profileEmail = user?.email.trim();
+    if (profileEmail != null && profileEmail.isNotEmpty) return profileEmail;
+    return null;
+  }
+
   Future<void> bootstrap() async {
     _firebase.authStateChanges().listen((firebaseUser) async {
-      user = firebaseUser == null ? null : await _firebase.getUser(firebaseUser.uid);
+      await _profileSub?.cancel();
+      _profileSub = null;
+      user = null;
       loading = false;
       notifyListeners();
+      if (firebaseUser == null) return;
+      loading = true;
+      notifyListeners();
+      _profileSub = _firebase.watchUser(firebaseUser.uid).listen(
+        (profile) {
+          user = profile;
+          loading = false;
+          notifyListeners();
+        },
+        onError: (e) {
+          error = e.toString();
+          loading = false;
+          notifyListeners();
+        },
+      );
     });
     await _localDb.database;
   }
@@ -80,6 +110,10 @@ class AuthProvider extends ChangeNotifier {
     });
   }
 
+  Stream<AppUser?> watchCurrentUserProfile() {
+    return _firebase.watchCurrentUserProfile();
+  }
+
   Future<bool> updateProfile({
     required String name,
     required String department,
@@ -105,7 +139,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<bool> sendPasswordReset() async {
-    final email = user?.email;
+    final email = passwordResetEmail;
     if (email == null || email.trim().isEmpty) {
       error = 'No account email is available for password reset.';
       notifyListeners();
@@ -129,5 +163,11 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  @override
+  void dispose() {
+    _profileSub?.cancel();
+    super.dispose();
   }
 }

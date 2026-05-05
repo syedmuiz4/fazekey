@@ -20,6 +20,7 @@ class FaceRegistrationScreen extends StatefulWidget {
 
 class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   CameraController? _controller;
+  FaceProvider? _faceProvider;
   final _captures = <XFile>[];
   String? _error;
   bool _busy = false;
@@ -30,6 +31,12 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
     super.initState();
     _initCamera();
     unawaited(_prepareFaceModel());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _faceProvider ??= context.read<FaceProvider>();
   }
 
   Future<void> _prepareFaceModel() async {
@@ -103,7 +110,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
 
   @override
   void dispose() {
-    unawaited(_controller?.dispose());
+    final controller = _controller;
+    _controller = null;
+    unawaited(controller?.dispose());
+    unawaited(_faceProvider?.closeDetector());
     super.dispose();
   }
 
@@ -176,7 +186,8 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       final faceProvider = context.read<FaceProvider>();
                       final authProvider = context.read<AuthProvider>();
                       final navigator = Navigator.of(context);
-                      final modelReady = _modelReady || await faceProvider.ensureModelReady();
+                      final modelReady =
+                          _modelReady || await faceProvider.ensureModelReady();
                       if (!modelReady) {
                         if (mounted) setState(() => _modelReady = false);
                         return;
@@ -184,7 +195,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       if (!mounted) return;
                       setState(() => _busy = true);
                       await _disposeCamera();
-                      final ok = await faceProvider.registerFace(user, _captures);
+                      final ok = await faceProvider.registerFace(
+                        user,
+                        _captures,
+                      );
                       await authProvider.refreshProfile();
                       if (ok && mounted) {
                         navigator.pushReplacementNamed(DashboardScreen.route);

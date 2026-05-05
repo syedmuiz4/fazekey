@@ -15,13 +15,16 @@ class SystemProvider extends ChangeNotifier {
   String? error;
 
   void listen() {
-    _sub ??= _firebase.watchSystemSettings().listen((value) {
-      settings = value;
-      notifyListeners();
-    }, onError: (e) {
-      error = e.toString();
-      notifyListeners();
-    });
+    _sub ??= _firebase.watchSystemSettings().listen(
+      (value) {
+        settings = value;
+        notifyListeners();
+      },
+      onError: (e) {
+        error = e.toString();
+        notifyListeners();
+      },
+    );
   }
 
   Future<void> save(SystemSettings next) async {
@@ -38,11 +41,31 @@ class SystemProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> toggleLockdown(bool value) => save(settings.copyWith(globalLockdown: value));
+  Future<void> toggleLockdown(bool value) =>
+      save(settings.copyWith(globalLockdown: value));
 
-  Future<void> toggleAfterHoursAlerts(bool value) => save(settings.copyWith(afterHoursAlerts: value));
+  Future<void> activateEmergencyLockdown() async {
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      await _firebase.activateEmergencyLockdown();
+      settings = settings.copyWith(globalLockdown: true);
+    } catch (e) {
+      error = e.toString();
+    }
+    loading = false;
+    notifyListeners();
+  }
 
-  Future<void> toggleIntrusionAlerts(bool value) => save(settings.copyWith(intrusionAlerts: value));
+  Future<void> toggleAfterHoursAlerts(bool value) =>
+      save(settings.copyWith(afterHoursAlerts: value));
+
+  Future<void> toggleIntrusionAlerts(bool value) =>
+      save(settings.copyWith(intrusionAlerts: value));
+
+  Future<void> toggleMonitoringWindowLogging(bool value) =>
+      save(settings.copyWith(monitoringWindowLogging: value));
 
   Future<void> updateAfterHours({required int start, required int end}) {
     return save(settings.copyWith(afterHoursStart: start, afterHoursEnd: end));

@@ -41,8 +41,16 @@ class FaceProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final embedding = await _face.averageEmbeddings(captures);
-      await _firebase.saveFace(user.id, embedding, photoUrl: captures.first.path);
-      await _face.localDb.upsertFace(userId: user.id, name: user.name, embedding: embedding);
+      await _firebase.saveFace(
+        user.id,
+        embedding,
+        photoUrl: captures.first.path,
+      );
+      await _face.localDb.upsertFace(
+        userId: user.id,
+        name: user.name,
+        embedding: embedding,
+      );
       loading = false;
       notifyListeners();
       return true;
@@ -90,6 +98,8 @@ class FaceProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> closeDetector() => _face.closeDetector();
+
   AccessLog buildLog({
     required AppUser? user,
     Area? area,
@@ -107,7 +117,9 @@ class FaceProvider extends ChangeNotifier {
       areaId: area?.id ?? areaId,
       areaName: area?.name ?? areaName,
       status: granted ? 'granted' : 'denied',
-      reason: granted ? (reason ?? 'Face verified offline') : (reason ?? 'Face not recognized'),
+      reason: granted
+          ? (reason ?? 'Face verified offline')
+          : (reason ?? 'Face not recognized'),
       timestamp: DateTime.now(),
       synced: false,
       snapshotPath: snapshotPath,

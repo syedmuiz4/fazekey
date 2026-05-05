@@ -56,7 +56,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        appBar: AppBar(title: const Text('Register'), backgroundColor: Colors.transparent),
+        appBar: AppBar(
+          title: const Text('Register'),
+          backgroundColor: Colors.transparent,
+        ),
         body: SafeArea(
           child: ListView(
             padding: const EdgeInsets.all(24),
@@ -67,30 +70,60 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      TextFormField(controller: _name, decoration: const InputDecoration(labelText: 'Name'), validator: _required),
+                      TextFormField(
+                        controller: _name,
+                        decoration: const InputDecoration(labelText: 'Name'),
+                        validator: _required,
+                      ),
                       const SizedBox(height: 12),
-                      TextFormField(controller: _email, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'Email'), validator: _required),
+                      TextFormField(
+                        controller: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: const InputDecoration(labelText: 'Email'),
+                        validator: _required,
+                      ),
                       const SizedBox(height: 12),
-                      TextFormField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password'), validator: _required),
+                      TextFormField(
+                        controller: _password,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Password',
+                        ),
+                        validator: _required,
+                      ),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
-                        key: ValueKey('register-department-$_level-$selectedDepartment'),
+                        key: ValueKey(
+                          'register-department-$_level-$selectedDepartment',
+                        ),
                         initialValue: selectedDepartment,
                         isExpanded: true,
-                        decoration: const InputDecoration(labelText: 'Department'),
+                        decoration: const InputDecoration(
+                          labelText: 'Department',
+                        ),
                         validator: _required,
                         items: departmentOptions
                             .map(
                               (department) => DropdownMenuItem(
                                 value: department,
-                                child: Text(department, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                child: Text(
+                                  department,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                             )
                             .toList(),
-                        onChanged: (value) => setState(() => _department = value),
+                        onChanged: (value) =>
+                            setState(() => _department = value),
                       ),
                       const SizedBox(height: 12),
-                      TextFormField(controller: _phone, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'Phone'), validator: _required),
+                      TextFormField(
+                        controller: _phone,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(labelText: 'Phone'),
+                        validator: _required,
+                      ),
                       const SizedBox(height: 16),
                       _TextSelector<int>(
                         label: 'Level',
@@ -107,20 +140,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       if (selectedArea == null)
                         Text(
                           'No restricted areas configured for Level $_level.',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
                         )
                       else
                         DropdownButtonFormField<String>(
                           key: ValueKey('register-area-$_level-$selectedArea'),
                           initialValue: selectedArea,
                           isExpanded: true,
-                          decoration: const InputDecoration(labelText: 'Restricted Area'),
+                          decoration: const InputDecoration(
+                            labelText: 'Restricted Area',
+                          ),
                           validator: _required,
                           items: areaOptions
                               .map(
                                 (area) => DropdownMenuItem(
                                   value: area,
-                                  child: Text(area, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  child: Text(
+                                    area,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               )
                               .toList(),
@@ -128,7 +172,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       if (auth.error != null) ...[
                         const SizedBox(height: 12),
-                        Text(auth.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                        Text(
+                          auth.error!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
                       ],
                       const SizedBox(height: 20),
                       PrimaryButton(
@@ -138,11 +187,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           if (!_form.currentState!.validate()) return;
                           if (selectedArea == null) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Add a restricted area for Level $_level before registering this account.')),
+                              SnackBar(
+                                content: Text(
+                                  'Add a restricted area for Level $_level before registering this account.',
+                                ),
+                              ),
                             );
                             return;
                           }
-                          final ok = await context.read<AuthProvider>().register(
+                          final ok = await context
+                              .read<AuthProvider>()
+                              .register(
                                 name: _name.text,
                                 email: _email.text,
                                 password: _password.text,
@@ -150,7 +205,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 phone: _phone.text,
                                 room: selectedArea,
                               );
-                          if (ok && context.mounted) Navigator.pushReplacementNamed(context, FaceRegistrationScreen.route);
+                          if (ok && context.mounted) {
+                            Navigator.pushReplacementNamed(
+                              context,
+                              FaceRegistrationScreen.route,
+                            );
+                          }
                         },
                       ),
                     ],
@@ -164,29 +224,44 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  String? _required(String? value) => value == null || value.trim().isEmpty ? 'Required' : null;
+  String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
 
   List<String> _departmentsForLevel(List<Area> areas, int level) {
     final floor = 'Level $level';
-    final departments = areas
-        .where((area) => area.active && area.floor.trim().toLowerCase() == floor.toLowerCase())
-        .expand((area) => area.allowedDepartments)
-        .map((department) => department.trim())
-        .where((department) => department.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
+    final departments =
+        areas
+            .where(
+              (area) =>
+                  area.active &&
+                  area.floor.trim().toLowerCase() == floor.toLowerCase(),
+            )
+            .expand((area) => area.allowedDepartments)
+            .map((department) => department.trim())
+            .where((department) => department.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
     return departments.isEmpty ? _fallbackDepartments : departments;
   }
 
   List<String> _restrictedAreasForLevel(List<Area> areas, int level) {
     final floor = 'Level $level';
-    final names = areas
-        .where((area) => area.active && area.floor.trim().toLowerCase() == floor.toLowerCase())
-        .map((area) => area.name.trim().isEmpty ? '$floor - Room ${area.roomNumber}' : area.name.trim())
-        .toSet()
-        .toList()
-      ..sort();
+    final names =
+        areas
+            .where(
+              (area) =>
+                  area.active &&
+                  area.floor.trim().toLowerCase() == floor.toLowerCase(),
+            )
+            .map(
+              (area) => area.name.trim().isEmpty
+                  ? '$floor - Room ${area.roomNumber}'
+                  : area.name.trim(),
+            )
+            .toSet()
+            .toList()
+          ..sort();
     return names;
   }
 
@@ -202,7 +277,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   String? _selectedOption(List<String> options, String? selected) {
     if (options.isEmpty) return null;
-    return selected != null && options.contains(selected) ? selected : options.first;
+    return selected != null && options.contains(selected)
+        ? selected
+        : options.first;
   }
 
   void _syncSelection({required String? department, required String? area}) {

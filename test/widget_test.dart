@@ -2,8 +2,81 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fazekey/main.dart' as app;
+import 'package:fazekey/models/access_log.dart';
+import 'package:fazekey/models/system_settings.dart';
+import 'package:fazekey/services/security_report_service.dart';
 
 void main() {
+  test('access window permits weekdays from 08:00 until before 10:00', () {
+    expect(
+      SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 4, 9, 5)),
+      isTrue,
+    );
+    expect(SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 4, 8)), isTrue);
+    expect(
+      SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 4, 9, 59)),
+      isTrue,
+    );
+  });
+
+  test('access window denies weekends and times outside 08:00-10:00', () {
+    expect(
+      SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 4, 7, 59)),
+      isFalse,
+    );
+    expect(SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 4, 10)), isFalse);
+    expect(
+      SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 9, 11, 5)),
+      isFalse,
+    );
+    expect(
+      SystemSettings.isAccessAllowedAt(DateTime(2026, 5, 10, 11, 5)),
+      isFalse,
+    );
+  });
+
+  test('after hours toggle controls scan denial policy', () {
+    final disabled = SystemSettings.defaults();
+    final enabled = disabled.copyWith(afterHoursAlerts: true);
+
+    expect(disabled.shouldDenyScanAt(DateTime(2026, 5, 9, 11, 5)), isFalse);
+    expect(enabled.shouldDenyScanAt(DateTime(2026, 5, 9, 11, 5)), isTrue);
+    expect(enabled.shouldDenyScanAt(DateTime(2026, 5, 4, 9, 5)), isFalse);
+    expect(enabled.shouldDenyScanAt(DateTime(2026, 5, 5, 13, 12)), isTrue);
+  });
+
+  test('system config afterHoursEnabled drives lockout policy', () {
+    final settings = SystemSettings.fromMap({
+      'afterHoursEnabled': true,
+      'accessWindowStart': 8,
+      'accessWindowEnd': 10,
+    });
+
+    expect(settings.shouldDenyScanAt(DateTime(2026, 5, 5, 13, 12)), isTrue);
+  });
+
+  test('security report CSV sanitizes escaped and control characters', () {
+    final csv = SecurityReportService().buildCsv([
+      AccessLog(
+        id: 'log-1',
+        userId: 'user-1',
+        userName: 'Ada \x1B[31m\nLovelace',
+        areaId: 'area-1',
+        areaName: 'Lab\rWing',
+        status: 'denied',
+        reason: r'Door\nforced \t open',
+        timestamp: DateTime(2026, 5, 5, 13, 12),
+        synced: true,
+      ),
+    ]);
+
+    expect(csv, isNot(contains('\x1B')));
+    expect(csv, isNot(contains('[31m')));
+    expect(csv, isNot(contains(r'\n')));
+    expect(csv, contains('Ada Lovelace'));
+    expect(csv, contains('Door forced open'));
+  });
+
   test('FaceKey project smoke test', () {
     expect('FaceKey'.isNotEmpty, isTrue);
     expect(app.FaceKeyApp, isNotNull);
@@ -19,11 +92,7 @@ void main() {
 
   testWidgets('logo image renders from asset path', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Image.asset('assets/images/logo2.png'),
-        ),
-      ),
+      MaterialApp(home: Scaffold(body: Image.asset('assets/images/logo2.png'))),
     );
     await tester.pumpAndSettle();
 

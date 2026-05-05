@@ -5,10 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/area.dart';
+import '../models/system_settings.dart';
 import '../providers/area_provider.dart';
+import '../providers/alert_provider.dart';
 import '../providers/face_provider.dart';
 import '../providers/log_provider.dart';
-import '../providers/system_provider.dart';
+import '../services/firebase_service.dart';
 import '../widgets/face_overlay.dart';
 import '../widgets/primary_button.dart';
 import 'access_result_screen.dart';
@@ -22,7 +24,9 @@ class FaceLoginScreen extends StatefulWidget {
 }
 
 class _FaceLoginScreenState extends State<FaceLoginScreen> {
+  final _firebase = FirebaseService();
   CameraController? _controller;
+  FaceProvider? _faceProvider;
   String? _error;
   bool _busy = false;
 
@@ -30,6 +34,12 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
   void initState() {
     super.initState();
     _initCamera();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _faceProvider ??= context.read<FaceProvider>();
   }
 
   Future<void> _initCamera() async {
@@ -60,59 +70,66 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     }
   }
 
-  Future<void> _scan() async {
-    final controller = _controller;
-    if (_busy ||
-        controller == null ||
-        !controller.value.isInitialized ||
-        controller.value.isTakingPicture) {
-      return;
-    }
+  Future<void> _scan(SystemSettings system) async {
+    if (_busy) return;
     setState(() => _busy = true);
     final faceProvider = context.read<FaceProvider>();
     final logProvider = context.read<LogProvider>();
-    final system = context.read<SystemProvider>().settings;
+    final alertProvider = context.read<AlertProvider>();
     final scanArea = _scanArea(context.read<AreaProvider>().areas);
+
     try {
+      if (system.globalLockdown) {
+        await _denyAccess(
+          faceProvider: faceProvider,
+          logProvider: logProvider,
+          alertProvider: alertProvider,
+          scanArea: scanArea,
+          system: system,
+          reason: 'Global lockdown is active',
+          alertTitle: 'FAZEKEY Lockdown',
+          alertBody: 'Global lockdown denied an access attempt.',
+          snackBarText: 'Intrusion alert: global lockdown denied access.',
+        );
+        return;
+      }
+
+      if (system.shouldDenyScanAt(DateTime.now())) {
+        await _denyAccess(
+          faceProvider: faceProvider,
+          logProvider: logProvider,
+          alertProvider: alertProvider,
+          scanArea: scanArea,
+          system: system,
+          reason: 'Access denied outside the active access window',
+          alertTitle: 'Access Denied',
+          alertBody:
+              'An access attempt was blocked outside the active access window.',
+          snackBarText: 'Access denied outside the active access window.',
+        );
+        return;
+      }
+
+      final controller = _controller;
+      if (controller == null ||
+          !controller.value.isInitialized ||
+          controller.value.isTakingPicture) {
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+
       final file = await controller.takePicture();
       await _disposeCamera();
       final snapshotPath = file.path;
-      if (system.globalLockdown) {
-        final log = faceProvider.buildLog(
-          user: null,
-          area: scanArea,
-          status: 'denied',
-          reason: 'Global lockdown is active',
-          snapshotPath: snapshotPath,
-        );
-        await logProvider.record(log);
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, AccessResultScreen.route, arguments: {'user': null, 'log': log});
-        return;
-      }
-
-      final live = await faceProvider.validateLiveness(file);
-      if (!live) {
-        final log = faceProvider.buildLog(
-          user: null,
-          area: scanArea,
-          status: 'denied',
-          reason: faceProvider.error ?? 'Liveness check failed',
-          snapshotPath: snapshotPath,
-        );
-        await logProvider.record(log);
-        if (!mounted) return;
-        Navigator.pushReplacementNamed(context, AccessResultScreen.route, arguments: {'user': null, 'log': log});
-        return;
-      }
 
       final user = await faceProvider.identify(file);
-      final hasAccess = user != null && (scanArea == null || user.canAccessArea(scanArea));
+      final hasAccess =
+          user != null && (scanArea == null || user.canAccessArea(scanArea));
       final reason = user == null
           ? faceProvider.error
           : hasAccess
-              ? 'Face verified for ${scanArea?.name ?? 'Campus Gate'}'
-              : 'RBAC denied: ${user.role} cannot access ${scanArea?.name ?? 'this area'}';
+          ? 'Face verified for ${scanArea?.name ?? 'Campus Gate'}'
+          : 'RBAC denied: ${user.role} cannot access ${scanArea?.name ?? 'this area'}';
       final log = faceProvider.buildLog(
         user: user,
         area: scanArea,
@@ -120,7 +137,21 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         reason: reason,
         snapshotPath: hasAccess ? null : snapshotPath,
       );
-      await logProvider.record(log);
+      await logProvider.record(
+        log,
+        firestoreLogging: system.monitoringWindowLogging,
+      );
+      if (!hasAccess && system.intrusionAlerts && mounted) {
+        await alertProvider.raiseIntrusionAlert(
+          title: 'Access Denied',
+          body: reason ?? 'A FAZEKEY access attempt was denied.',
+          severity: user == null ? 'High' : 'Medium',
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Intrusion alert: access denied.')),
+        );
+      }
       if (!mounted) return;
       Navigator.pushReplacementNamed(
         context,
@@ -136,6 +167,46 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         await _initCamera();
       }
     }
+  }
+
+  Future<void> _denyAccess({
+    required FaceProvider faceProvider,
+    required LogProvider logProvider,
+    required AlertProvider alertProvider,
+    required Area? scanArea,
+    required SystemSettings system,
+    required String reason,
+    required String alertTitle,
+    required String alertBody,
+    required String snackBarText,
+  }) async {
+    final log = faceProvider.buildLog(
+      user: null,
+      area: scanArea,
+      status: 'denied',
+      reason: reason,
+    );
+    await logProvider.record(
+      log,
+      firestoreLogging: system.monitoringWindowLogging,
+    );
+    if (system.intrusionAlerts && mounted) {
+      await alertProvider.raiseIntrusionAlert(
+        title: alertTitle,
+        body: alertBody,
+        severity: 'Critical',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(snackBarText)));
+    }
+    if (!mounted) return;
+    Navigator.pushReplacementNamed(
+      context,
+      AccessResultScreen.route,
+      arguments: {'user': null, 'log': log},
+    );
   }
 
   Area? _scanArea(List<Area> areas) {
@@ -160,7 +231,10 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
 
   @override
   void dispose() {
-    unawaited(_controller?.dispose());
+    final controller = _controller;
+    _controller = null;
+    unawaited(controller?.dispose());
+    unawaited(_faceProvider?.closeDetector());
     super.dispose();
   }
 
@@ -170,61 +244,106 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: _controller?.value.isInitialized == true
-                  ? CameraPreview(_controller!)
-                  : const Center(child: CircularProgressIndicator()),
-            ),
-            const Positioned.fill(child: FaceGuideOverlay()),
-            Positioned(
-              left: 20,
-              right: 20,
-              top: 16,
-              child: Row(
-                children: [
-                  IconButton.filledTonal(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.arrow_back_rounded),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'Face Login',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
+        child: StreamBuilder<SystemSettings>(
+          stream: _firebase.watchSystemSettings(),
+          initialData: SystemSettings.defaults(),
+          builder: (context, snapshot) {
+            final settings = snapshot.data ?? SystemSettings.defaults();
+            final lockedOut =
+                settings.globalLockdown ||
+                settings.shouldDenyScanAt(DateTime.now());
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: _controller?.value.isInitialized == true
+                      ? CameraPreview(_controller!)
+                      : const Center(child: CircularProgressIndicator()),
+                ),
+                const Positioned.fill(child: FaceGuideOverlay()),
+                if (lockedOut)
+                  Positioned.fill(
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: .72),
+                      child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.lock_clock_rounded,
+                                color: Colors.white,
+                                size: 56,
+                              ),
+                              const SizedBox(height: 14),
+                              Text(
+                                settings.globalLockdown
+                                    ? 'Access Lockdown Active'
+                                    : 'Access Window Closed',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-            Positioned(
-              left: 20,
-              right: 20,
-              bottom: 24,
-              child: Column(
-                children: [
-                  if (_error != null || face.error != null)
-                    Text(
-                      _error ?? face.error!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.redAccent),
-                    ),
-                  const SizedBox(height: 12),
-                  PrimaryButton(
-                    label: 'Scan Face',
-                    loading: _busy || face.loading,
-                    icon: Icons.center_focus_strong_rounded,
-                    onPressed: _scan,
+                Positioned(
+                  left: 20,
+                  right: 20,
+                  top: 16,
+                  child: Row(
+                    children: [
+                      IconButton.filledTonal(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.arrow_back_rounded),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Face Login',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          ],
+                ),
+                Positioned(
+                  left: 20,
+                  right: 20,
+                  bottom: 24,
+                  child: Column(
+                    children: [
+                      if (_error != null || face.error != null)
+                        Text(
+                          _error ?? face.error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.redAccent),
+                        ),
+                      const SizedBox(height: 12),
+                      PrimaryButton(
+                        label: lockedOut ? 'Access Denied' : 'Scan Face',
+                        loading: _busy || face.loading,
+                        icon: lockedOut
+                            ? Icons.lock_clock_rounded
+                            : Icons.center_focus_strong_rounded,
+                        onPressed: lockedOut ? null : () => _scan(settings),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );

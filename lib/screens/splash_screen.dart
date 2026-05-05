@@ -14,7 +14,8 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
   static const _logoHeroTag = 'facekey-logo';
   late final AnimationController _scanController;
 
@@ -28,7 +29,10 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     Future.delayed(const Duration(milliseconds: 1400), () {
       if (!mounted) return;
       final auth = context.read<AuthProvider>();
-      Navigator.pushReplacementNamed(context, auth.isAuthenticated ? DashboardScreen.route : WelcomeScreen.route);
+      Navigator.pushReplacementNamed(
+        context,
+        auth.isAuthenticated ? DashboardScreen.route : WelcomeScreen.route,
+      );
     });
   }
 
@@ -70,9 +74,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                 child: Text(
                   'v1.0.0',
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
@@ -110,25 +114,33 @@ class _BiometricLogoScan extends StatelessWidget {
               child: AnimatedBuilder(
                 animation: controller,
                 builder: (context, _) {
-                  final glow = .55 + (.45 * Curves.easeInOut.transform(controller.value));
+                  final glow =
+                      .55 +
+                      (.45 * Curves.easeInOut.transform(controller.value));
                   return Column(
                     children: [
                       Text(
                         'Biometric Scan',
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                              color: const Color(0xFF22D3EE).withValues(alpha: glow),
-                              fontWeight: FontWeight.w900,
-                            ),
+                          color: const Color(
+                            0xFF22D3EE,
+                          ).withValues(alpha: glow),
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Container(
                         width: 132,
                         height: 2,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF22D3EE).withValues(alpha: glow),
+                          color: const Color(
+                            0xFF22D3EE,
+                          ).withValues(alpha: glow),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF22D3EE).withValues(alpha: glow),
+                              color: const Color(
+                                0xFF22D3EE,
+                              ).withValues(alpha: glow),
                               blurRadius: 16,
                               spreadRadius: 1,
                             ),
@@ -143,7 +155,10 @@ class _BiometricLogoScan extends StatelessWidget {
             AnimatedBuilder(
               animation: controller,
               builder: (context, _) {
-                final top = (logoHeight + 40) * Curves.easeInOutCubic.transform(controller.value) - 20;
+                final top =
+                    (logoHeight + 40) *
+                        Curves.easeInOutCubic.transform(controller.value) -
+                    20;
                 return Positioned(
                   top: top,
                   left: 10,
@@ -157,7 +172,9 @@ class _BiometricLogoScan extends StatelessWidget {
                             color: const Color(0xFF22D3EE),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(0xFF22D3EE).withValues(alpha: .92),
+                                color: const Color(
+                                  0xFF22D3EE,
+                                ).withValues(alpha: .92),
                                 blurRadius: 18,
                                 spreadRadius: 2,
                               ),

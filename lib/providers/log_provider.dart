@@ -23,13 +23,18 @@ class LogProvider extends ChangeNotifier {
 
   void listen() {
     _sub?.cancel();
-    _sub = _firebase.watchLogs(query: query, limit: limit).listen((value) {
-      logs = value;
-      notifyListeners();
-    }, onError: (e) {
-      error = e.toString();
-      notifyListeners();
-    });
+    _sub = _firebase
+        .watchLogs(query: query, limit: limit)
+        .listen(
+          (value) {
+            logs = value;
+            notifyListeners();
+          },
+          onError: (e) {
+            error = e.toString();
+            notifyListeners();
+          },
+        );
   }
 
   void search(String value) {
@@ -42,7 +47,8 @@ class LogProvider extends ChangeNotifier {
     listen();
   }
 
-  Future<void> record(AccessLog log) async {
+  Future<void> record(AccessLog log, {bool firestoreLogging = true}) async {
+    if (!firestoreLogging) return;
     try {
       await _firebase.addLog(log);
     } catch (_) {

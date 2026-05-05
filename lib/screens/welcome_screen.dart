@@ -53,15 +53,18 @@ class WelcomeScreen extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: GoogleFonts.inter(
                     textStyle: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .7),
-                        ),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: .7),
+                    ),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
                 const Spacer(),
                 PrimaryButton(
                   label: 'Get Started',
-                  onPressed: () => Navigator.pushNamed(context, LoginScreen.route),
+                  onPressed: () =>
+                      Navigator.pushNamed(context, LoginScreen.route),
                 ),
               ],
             ),

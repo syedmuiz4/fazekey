@@ -26,30 +26,31 @@ class AccessLog {
   final String? snapshotPath;
 
   bool get granted => status == 'granted';
-  bool get isUnknownFace => userId.isEmpty || userName.toLowerCase() == 'unknown face';
+  bool get isUnknownFace =>
+      userId.isEmpty || userName.toLowerCase() == 'unknown face';
 
   factory AccessLog.fromMap(String id, Map<String, dynamic> map) => AccessLog(
-        id: id,
-        userId: map['userId'] ?? '',
-        userName: map['userName'] ?? 'Unknown',
-        areaId: map['areaId'] ?? '',
-        areaName: map['areaName'] ?? 'Campus Gate',
-        status: map['status'] ?? 'denied',
-        reason: map['reason'] ?? '',
-        timestamp: (map['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
-        synced: map['synced'] ?? true,
-        snapshotPath: map['snapshotPath'],
-      );
+    id: id,
+    userId: map['userId'] ?? '',
+    userName: map['userName'] ?? 'Unknown',
+    areaId: map['areaId'] ?? '',
+    areaName: map['areaName'] ?? 'Campus Gate',
+    status: map['status'] ?? 'denied',
+    reason: map['reason'] ?? '',
+    timestamp: (map['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+    synced: map['synced'] ?? true,
+    snapshotPath: map['snapshotPath'],
+  );
 
   Map<String, dynamic> toMap() => {
-        'userId': userId,
-        'userName': userName,
-        'areaId': areaId,
-        'areaName': areaName,
-        'status': status,
-        'reason': reason,
-        'timestamp': Timestamp.fromDate(timestamp),
-        'synced': synced,
-        if (snapshotPath != null) 'snapshotPath': snapshotPath,
-      };
+    'userId': userId,
+    'userName': userName,
+    'areaId': areaId,
+    'areaName': areaName,
+    'status': status,
+    'reason': reason,
+    'timestamp': Timestamp.fromDate(timestamp),
+    'synced': synced,
+    if (snapshotPath != null) 'snapshotPath': snapshotPath,
+  };
 }

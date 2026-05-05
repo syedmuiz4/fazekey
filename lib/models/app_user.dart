@@ -31,9 +31,13 @@ class AppUser {
     if (!area.active) return false;
     final normalizedRole = role.trim().toLowerCase();
     if (normalizedRole == 'admin' || normalizedRole == 'security') return true;
-    final departmentAllowed = area.allowedDepartments.isEmpty ||
-        area.allowedDepartments.any((d) => d.trim().toLowerCase() == department.trim().toLowerCase());
-    final roleAllowed = area.allowedRoles.isEmpty ||
+    final departmentAllowed =
+        area.allowedDepartments.isEmpty ||
+        area.allowedDepartments.any(
+          (d) => d.trim().toLowerCase() == department.trim().toLowerCase(),
+        );
+    final roleAllowed =
+        area.allowedRoles.isEmpty ||
         area.allowedRoles.any((r) => r.trim().toLowerCase() == normalizedRole);
     return departmentAllowed && roleAllowed;
   }
@@ -54,16 +58,16 @@ class AppUser {
   }
 
   Map<String, dynamic> toMap() => {
-        'name': name,
-        'email': email,
-        'department': department,
-        'phone': phone,
-        'room': room,
-        'role': role,
-        'createdAt': Timestamp.fromDate(createdAt),
-        'hasFace': hasFace,
-        'photoUrl': photoUrl,
-      };
+    'name': name,
+    'email': email,
+    'department': department,
+    'phone': phone,
+    'room': room,
+    'role': role,
+    'createdAt': Timestamp.fromDate(createdAt),
+    'hasFace': hasFace,
+    'photoUrl': photoUrl,
+  };
 
   AppUser copyWith({
     String? name,
@@ -72,17 +76,16 @@ class AppUser {
     String? room,
     bool? hasFace,
     String? photoUrl,
-  }) =>
-      AppUser(
-        id: id,
-        name: name ?? this.name,
-        email: email,
-        department: department ?? this.department,
-        phone: phone ?? this.phone,
-        room: room ?? this.room,
-        role: role,
-        createdAt: createdAt,
-        hasFace: hasFace ?? this.hasFace,
-        photoUrl: photoUrl ?? this.photoUrl,
-      );
+  }) => AppUser(
+    id: id,
+    name: name ?? this.name,
+    email: email,
+    department: department ?? this.department,
+    phone: phone ?? this.phone,
+    room: room ?? this.room,
+    role: role,
+    createdAt: createdAt,
+    hasFace: hasFace ?? this.hasFace,
+    photoUrl: photoUrl ?? this.photoUrl,
+  );
 }

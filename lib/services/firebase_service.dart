@@ -10,16 +10,23 @@ import '../models/system_settings.dart';
 
 class FirebaseService {
   FirebaseService({FirebaseAuth? auth, FirebaseFirestore? firestore})
-      : auth = auth ?? FirebaseAuth.instance,
-        firestore = firestore ?? FirebaseFirestore.instance;
+    : auth = auth ?? FirebaseAuth.instance,
+      firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseAuth auth;
   final FirebaseFirestore firestore;
 
   Stream<User?> authStateChanges() => auth.authStateChanges();
 
+  String? get currentUserId => auth.currentUser?.uid;
+
+  String? get currentUserEmail => auth.currentUser?.email;
+
   Future<UserCredential> login(String email, String password) {
-    return auth.signInWithEmailAndPassword(email: email.trim(), password: password);
+    return auth.signInWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
   }
 
   Future<AppUser> register({
@@ -31,7 +38,10 @@ class FirebaseService {
     required String room,
   }) async {
     final cred = await _authCall(
-      () => auth.createUserWithEmailAndPassword(email: email.trim(), password: password),
+      () => auth.createUserWithEmailAndPassword(
+        email: email.trim(),
+        password: password,
+      ),
     );
     final user = AppUser(
       id: cred.user!.uid,
@@ -55,19 +65,20 @@ class FirebaseService {
       if (e.code == 'configuration-not-found' ||
           e.message?.contains('CONFIGURATION_NOT_FOUND') == true) {
         throw Exception(
-          'Firebase Auth is not configured for this app. Enable Email/Password sign-in in Firebase Authentication and make sure the Android app package is com.example.fazekey.',
+          'Account recovery is not configured for this app.',
         );
       }
-      throw Exception(e.message ?? 'Firebase Auth failed: ${e.code}');
+      throw Exception(e.message ?? 'Authentication failed: ${e.code}');
     }
   }
 
-  DocumentReference<Map<String, dynamic>> userRef(String id) => firestore.collection('users').doc(id);
+  DocumentReference<Map<String, dynamic>> userRef(String id) =>
+      firestore.collection('users').doc(id);
 
   Future<AppUser?> currentUserProfile() async {
-    final uid = auth.currentUser?.uid;
-    if (uid == null) return null;
-    return getUser(uid);
+    final account = auth.currentUser;
+    if (account == null) return null;
+    return await getUser(account.uid) ?? _fallbackUser(account);
   }
 
   Future<AppUser?> getUser(String id) async {
@@ -76,11 +87,52 @@ class FirebaseService {
     return AppUser.fromMap(snap.id, snap.data()!);
   }
 
-  Future<void> updateUserProfile(AppUser user) {
-    return userRef(user.id).set(user.toMap(), SetOptions(merge: true));
+  Stream<AppUser?> watchUser(String id) {
+    return userRef(id).snapshots().map((snap) {
+      final data = snap.data();
+      if (!snap.exists || data == null) return null;
+      return AppUser.fromMap(snap.id, data);
+    });
   }
 
-  Future<void> saveFace(String userId, List<double> embedding, {String? photoUrl}) async {
+  Stream<AppUser?> watchCurrentUserProfile() {
+    return authStateChanges().asyncExpand((user) {
+      if (user == null) return Stream<AppUser?>.value(null);
+      return userRef(user.uid).snapshots().map((snap) {
+        final data = snap.data();
+        if (snap.exists && data != null) return AppUser.fromMap(snap.id, data);
+        return _fallbackUser(user);
+      });
+    });
+  }
+
+  Future<List<AppUser>> getAllUsers() async {
+    final snap = await firestore
+        .collection('users')
+        .orderBy('createdAt', descending: true)
+        .get();
+    return snap.docs.map((doc) => AppUser.fromMap(doc.id, doc.data())).toList();
+  }
+
+  Future<void> updateUserProfile(AppUser user) {
+    return userRef(user.id).set({
+      'name': user.name.trim(),
+      if (user.email.trim().isNotEmpty) 'email': user.email.trim(),
+      'department': user.department.trim(),
+      'phone': user.phone.trim(),
+      'room': user.room.trim(),
+      'role': user.role.trim().isEmpty ? 'admin' : user.role.trim(),
+      'createdAt': Timestamp.fromDate(user.createdAt),
+      'hasFace': user.hasFace,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> saveFace(
+    String userId,
+    List<double> embedding, {
+    String? photoUrl,
+  }) async {
     await userRef(userId).set({
       'hasFace': true,
       'faceEmbedding': embedding,
@@ -101,7 +153,8 @@ class FirebaseService {
       .snapshots()
       .map((s) => s.docs.map((d) => Area.fromMap(d.id, d.data())).toList());
 
-  Future<void> addArea(Area area) => firestore.collection('areas').add(area.toMap());
+  Future<void> addArea(Area area) =>
+      firestore.collection('areas').add(area.toMap());
 
   Future<void> ensureSampleAreas() async {
     for (final entry in _sampleAreas.entries) {
@@ -113,7 +166,10 @@ class FirebaseService {
     }
   }
 
-  Future<void> updateArea(Area area) => firestore.collection('areas').doc(area.id).set(area.toMap(), SetOptions(merge: true));
+  Future<void> updateArea(Area area) => firestore
+      .collection('areas')
+      .doc(area.id)
+      .set(area.toMap(), SetOptions(merge: true));
 
   Future<void> updateAreaOccupancy(String areaId, int delta) async {
     if (areaId.isEmpty) return;
@@ -129,11 +185,19 @@ class FirebaseService {
         .limit(limit)
         .snapshots()
         .map((s) {
-      final logs = s.docs.map((d) => AccessLog.fromMap(d.id, d.data())).toList();
-      if (query == null || query.trim().isEmpty) return logs;
-      final q = query.toLowerCase();
-      return logs.where((l) => '${l.userName} ${l.areaName} ${l.status} ${l.reason}'.toLowerCase().contains(q)).toList();
-    });
+          final logs = s.docs
+              .map((d) => AccessLog.fromMap(d.id, d.data()))
+              .toList();
+          if (query == null || query.trim().isEmpty) return logs;
+          final q = query.toLowerCase();
+          return logs
+              .where(
+                (l) => '${l.userName} ${l.areaName} ${l.status} ${l.reason}'
+                    .toLowerCase()
+                    .contains(q),
+              )
+              .toList();
+        });
   }
 
   Future<void> addLog(AccessLog log) async {
@@ -165,20 +229,38 @@ class FirebaseService {
   }
 
   Future<void> syncEncodedLog(Map<String, dynamic> row) async {
-    final payload = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
-    payload['timestamp'] = Timestamp.fromDate(DateTime.parse(payload['timestamp'] as String));
+    final payload =
+        jsonDecode(row['payload'] as String) as Map<String, dynamic>;
+    payload['timestamp'] = Timestamp.fromDate(
+      DateTime.parse(payload['timestamp'] as String),
+    );
     payload['synced'] = true;
-    await firestore.collection('accessLogs').doc(row['id'] as String).set(payload);
+    await firestore
+        .collection('accessLogs')
+        .doc(row['id'] as String)
+        .set(payload);
   }
 
-  DocumentReference<Map<String, dynamic>> get systemSettingsRef => firestore.collection('system').doc('settings');
+  DocumentReference<Map<String, dynamic>> get systemSettingsRef =>
+      firestore.collection('system').doc('system_config');
 
   Stream<SystemSettings> watchSystemSettings() {
-    return systemSettingsRef.snapshots().map((s) => SystemSettings.fromMap(s.data()));
+    return systemSettingsRef.snapshots().map(
+      (s) => SystemSettings.fromMap(s.data()),
+    );
   }
 
   Future<void> saveSystemSettings(SystemSettings settings) {
     return systemSettingsRef.set(settings.toMap(), SetOptions(merge: true));
+  }
+
+  Future<void> activateEmergencyLockdown({String source = 'dashboard_sos'}) {
+    return systemSettingsRef.set({
+      'globalLockdown': true,
+      'system_status': 'lockdown',
+      'lockdownSource': source,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<SystemSettings> getSystemSettings() async {
@@ -191,8 +273,18 @@ class FirebaseService {
     final start = DateTime(today.year, today.month, today.day);
     final users = await firestore.collection('users').count().get();
     final areas = await firestore.collection('areas').count().get();
-    final active = await firestore.collection('accessLogs').where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start)).where('status', isEqualTo: 'granted').count().get();
-    final denied = await firestore.collection('accessLogs').where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start)).where('status', isEqualTo: 'denied').count().get();
+    final active = await firestore
+        .collection('accessLogs')
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('status', isEqualTo: 'granted')
+        .count()
+        .get();
+    final denied = await firestore
+        .collection('accessLogs')
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('status', isEqualTo: 'denied')
+        .count()
+        .get();
     return {
       'activeToday': active.count ?? 0,
       'deniedAccess': denied.count ?? 0,
@@ -200,6 +292,18 @@ class FirebaseService {
       'areasMonitored': areas.count ?? 0,
     };
   }
+
+  AppUser _fallbackUser(User user) => AppUser(
+    id: user.uid,
+    name: user.displayName ?? '',
+    email: user.email ?? '',
+    department: '',
+    phone: user.phoneNumber ?? '',
+    room: '',
+    role: 'admin',
+    createdAt: DateTime.now(),
+    hasFace: false,
+  );
 
   static final Map<String, Area> _sampleAreas = {
     'sample_level_1_access_lab': Area(
@@ -210,7 +314,10 @@ class FirebaseService {
       roomNumber: '31',
       active: true,
       createdAt: DateTime(2026),
-      allowedDepartments: const ['Software Engineering', 'Information Security'],
+      allowedDepartments: const [
+        'Software Engineering',
+        'Information Security',
+      ],
       allowedRoles: const ['Admin', 'Security', 'Staff'],
       currentOccupancy: 0,
       capacity: 25,

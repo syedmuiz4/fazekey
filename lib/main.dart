@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/area_provider.dart';
+import 'providers/alert_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/face_provider.dart';
 import 'providers/log_provider.dart';
@@ -11,6 +12,7 @@ import 'providers/system_provider.dart';
 import 'screens/access_result_screen.dart';
 import 'screens/add_area_screen.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/edit_profile_screen.dart';
 import 'screens/face_login_screen.dart';
 import 'screens/face_registration_screen.dart';
 import 'screens/login_screen.dart';
@@ -21,21 +23,30 @@ import 'screens/welcome_screen.dart';
 import 'services/firebase_service.dart';
 import 'services/face_recognition_service.dart';
 import 'services/local_database_service.dart';
+import 'services/push_notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  final push = PushNotificationService();
+  await push.initialize();
   final localDb = LocalDatabaseService();
   await localDb.database;
   final firebase = FirebaseService();
-  runApp(FaceKeyApp(firebase: firebase, localDb: localDb));
+  runApp(FaceKeyApp(firebase: firebase, localDb: localDb, push: push));
 }
 
 class FaceKeyApp extends StatelessWidget {
-  const FaceKeyApp({super.key, required this.firebase, required this.localDb});
+  const FaceKeyApp({
+    super.key,
+    required this.firebase,
+    required this.localDb,
+    required this.push,
+  });
 
   final FirebaseService firebase;
   final LocalDatabaseService localDb;
+  final PushNotificationService push;
 
   @override
   Widget build(BuildContext context) {
@@ -45,11 +56,15 @@ class FaceKeyApp extends StatelessWidget {
           create: (_) => AuthProvider(firebase, localDb)..bootstrap(),
         ),
         ChangeNotifierProvider(
-          create: (_) => FaceProvider(FaceRecognitionService(localDb), firebase),
+          create: (_) =>
+              FaceProvider(FaceRecognitionService(localDb), firebase),
         ),
         ChangeNotifierProvider(create: (_) => AreaProvider(firebase)),
         ChangeNotifierProvider(create: (_) => LogProvider(firebase, localDb)),
-        ChangeNotifierProvider(create: (_) => SystemProvider(firebase)..listen()),
+        ChangeNotifierProvider(
+          create: (_) => SystemProvider(firebase)..listen(),
+        ),
+        ChangeNotifierProvider(create: (_) => AlertProvider(push)..listen()),
       ],
       child: Consumer<AuthProvider>(
         builder: (context, auth, _) {
@@ -65,9 +80,11 @@ class FaceKeyApp extends StatelessWidget {
               WelcomeScreen.route: (_) => const WelcomeScreen(),
               LoginScreen.route: (_) => const LoginScreen(),
               RegisterScreen.route: (_) => const RegisterScreen(),
-              FaceRegistrationScreen.route: (_) => const FaceRegistrationScreen(),
+              FaceRegistrationScreen.route: (_) =>
+                  const FaceRegistrationScreen(),
               FaceLoginScreen.route: (_) => const FaceLoginScreen(),
               DashboardScreen.route: (_) => const DashboardScreen(),
+              EditProfileScreen.route: (_) => const EditProfileScreen(),
               NotificationsScreen.route: (_) => const NotificationsScreen(),
               AddAreaScreen.route: (_) => const AddAreaScreen(),
               AccessResultScreen.route: (_) => const AccessResultScreen(),
@@ -92,12 +109,19 @@ class FaceKeyApp extends StatelessWidget {
       ),
     );
     return base.copyWith(
-      scaffoldBackgroundColor: dark ? const Color(0xFF080A12) : const Color(0xFFF6F7FB),
+      scaffoldBackgroundColor: dark
+          ? const Color(0xFF080A12)
+          : const Color(0xFFF6F7FB),
       appBarTheme: const AppBarTheme(centerTitle: false, elevation: 0),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: dark ? Colors.white.withValues(alpha: .07) : Colors.white.withValues(alpha: .72),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(22), borderSide: BorderSide.none),
+        fillColor: dark
+            ? Colors.white.withValues(alpha: .07)
+            : Colors.white.withValues(alpha: .72),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(22),
+          borderSide: BorderSide.none,
+        ),
       ),
       cardTheme: CardThemeData(
         elevation: 0,

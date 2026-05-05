@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.fazekey.fazekey"
+    namespace = "com.fazekey.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -23,7 +23,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.fazekey"
+        applicationId = "com.fazekey.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -45,6 +45,12 @@ flutter {
     source = "../.."
 }
 
+configurations.all {
+    exclude(group = "com.google.firebase", module = "firebase-iid")
+}
+
 dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:32.8.0"))
+    implementation("com.google.firebase:firebase-messaging")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

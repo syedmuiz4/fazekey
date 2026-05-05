@@ -1,132 +1,142 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../models/security_alert.dart';
+import '../providers/alert_provider.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 
-class NotificationsScreen extends StatelessWidget {
+class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
   static const route = '/notifications';
 
   @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final alerts = [
-      _DemoAlert(
-        title: 'Door access normalized',
-        body: 'Level 1 - Access Lab returned to normal access flow.',
-        severity: 'Info',
-        timestamp: now.subtract(const Duration(minutes: 4)),
-        icon: Icons.check_circle_rounded,
-        color: const Color(0xFF32D583),
-      ),
-      _DemoAlert(
-        title: 'Unknown face attempt',
-        body: 'Unrecognized scan was denied at Level 2 - Research Suite.',
-        severity: 'High',
-        timestamp: now.subtract(const Duration(minutes: 18)),
-        icon: Icons.face_retouching_off_rounded,
-        color: const Color(0xFFFF5B66),
-      ),
-      _DemoAlert(
-        title: 'Incident report received',
-        body: 'Security desk logged a medium-priority corridor inspection.',
-        severity: 'Medium',
-        timestamp: now.subtract(const Duration(hours: 1, minutes: 6)),
-        icon: Icons.assignment_rounded,
-        color: const Color(0xFFFDB022),
-      ),
-      _DemoAlert(
-        title: 'Cloud sync complete',
-        body: 'All access logs and profile updates are available for review.',
-        severity: 'Synced',
-        timestamp: now.subtract(const Duration(hours: 2, minutes: 12)),
-        icon: Icons.cloud_done_rounded,
-        color: const Color(0xFF22D3EE),
-      ),
-    ];
+  State<NotificationsScreen> createState() => _NotificationsScreenState();
+}
 
+class _NotificationsScreenState extends State<NotificationsScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<AlertProvider>().markAllRead();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final alerts = context.watch<AlertProvider>().alerts;
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
-        appBar: AppBar(title: const Text('Recent Alerts'), backgroundColor: Colors.transparent),
-        body: ListView.separated(
-          padding: const EdgeInsets.all(18),
-          itemCount: alerts.length + 1,
-          separatorBuilder: (_, index) => const SizedBox(height: 12),
-          itemBuilder: (context, index) {
-            if (index == 0) {
-              return GlassCard(
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primary.withValues(alpha: .16),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Icon(Icons.notifications_active_rounded, color: Theme.of(context).colorScheme.primary),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Demo alert log', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900)),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Static monitoring events for evaluation.',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            final alert = alerts[index - 1];
-            return GlassCard(
-              child: ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(
-                  backgroundColor: alert.color.withValues(alpha: .16),
-                  child: Icon(alert.icon, color: alert.color),
-                ),
-                title: Text(alert.title, style: const TextStyle(fontWeight: FontWeight.w800)),
-                subtitle: Text('${alert.body}\n${DateFormat.yMMMd().add_jm().format(alert.timestamp)}'),
-                trailing: Chip(
-                  visualDensity: VisualDensity.compact,
-                  label: Text(alert.severity),
-                  side: BorderSide(color: alert.color.withValues(alpha: .32)),
-                  backgroundColor: alert.color.withValues(alpha: .10),
-                ),
-                isThreeLine: true,
-              ),
-            );
-          },
+        appBar: AppBar(
+          title: const Text('Recent Alerts'),
+          backgroundColor: Colors.transparent,
         ),
+        body: alerts.isEmpty
+            ? const _EmptyAlerts()
+            : ListView.separated(
+                padding: const EdgeInsets.all(18),
+                itemCount: alerts.length,
+                separatorBuilder: (_, index) => const SizedBox(height: 12),
+                itemBuilder: (context, index) =>
+                    _AlertCard(alert: alerts[index]),
+              ),
       ),
     );
   }
 }
 
-class _DemoAlert {
-  const _DemoAlert({
-    required this.title,
-    required this.body,
-    required this.severity,
-    required this.timestamp,
-    required this.icon,
-    required this.color,
-  });
+class _EmptyAlerts extends StatelessWidget {
+  const _EmptyAlerts();
 
-  final String title;
-  final String body;
-  final String severity;
-  final DateTime timestamp;
-  final IconData icon;
-  final Color color;
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        GlassCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'No alerts recorded',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Intrusion, lockdown, and denied-access events will appear here when they occur.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AlertCard extends StatelessWidget {
+  const _AlertCard({required this.alert});
+
+  final SecurityAlert alert;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _severityColor(alert.severity);
+    return GlassCard(
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: CircleAvatar(
+          backgroundColor: color.withValues(alpha: .16),
+          child: Icon(_severityIcon(alert.severity), color: color),
+        ),
+        title: Text(
+          alert.title,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          '${alert.body}\n${DateFormat.yMMMd().add_jm().format(alert.timestamp)}',
+        ),
+        trailing: Chip(
+          visualDensity: VisualDensity.compact,
+          label: Text(alert.severity),
+          side: BorderSide(color: color.withValues(alpha: .32)),
+          backgroundColor: color.withValues(alpha: .10),
+        ),
+        isThreeLine: true,
+      ),
+    );
+  }
+
+  Color _severityColor(String severity) {
+    switch (severity.toLowerCase()) {
+      case 'critical':
+        return const Color(0xFFE11D48);
+      case 'high':
+        return const Color(0xFFFF5B66);
+      case 'medium':
+        return const Color(0xFFFDB022);
+      default:
+        return const Color(0xFF22D3EE);
+    }
+  }
+
+  IconData _severityIcon(String severity) {
+    switch (severity.toLowerCase()) {
+      case 'critical':
+        return Icons.emergency_rounded;
+      case 'high':
+        return Icons.warning_rounded;
+      case 'medium':
+        return Icons.shield_rounded;
+      default:
+        return Icons.notifications_rounded;
+    }
+  }
 }
