@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -10,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/access_log.dart';
 import '../models/app_user.dart';
+import '../models/area.dart';
 import '../providers/alert_provider.dart';
 import '../providers/area_provider.dart';
 import '../providers/auth_provider.dart';
@@ -23,6 +25,7 @@ import '../widgets/glass_card.dart';
 import 'add_area_screen.dart';
 import 'edit_profile_screen.dart';
 import 'face_login_screen.dart';
+import 'face_registration_screen.dart';
 import 'notifications_screen.dart';
 import 'welcome_screen.dart';
 
@@ -34,8 +37,35 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
+void _pushNamedAfterFrame(
+  BuildContext context,
+  String route, {
+  Object? arguments,
+  bool rootNavigator = false,
+}) {
+  SchedulerBinding.instance.addPostFrameCallback((_) {
+    if (!context.mounted) return;
+    Navigator.of(context, rootNavigator: rootNavigator).pushNamed(
+      route,
+      arguments: arguments,
+    );
+  });
+}
+
+void _pushAndClearAfterFrame(BuildContext context, String route) {
+  SchedulerBinding.instance.addPostFrameCallback((_) {
+    if (!context.mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, route, (_) => false);
+  });
+}
+
 class _DashboardScreenState extends State<DashboardScreen> {
   int _index = 0;
+  int _userPreviewIndex = 0;
+  String? _resolvedUserId;
+  bool? _resolvedIsAdmin;
+  bool _roleResolutionQueued = false;
+  bool _previewUserUi = false;
 
   @override
   void initState() {
@@ -51,25 +81,143 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    if (auth.loading && auth.user == null) {
+      return const AppBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    return StreamBuilder<AppUser?>(
+      stream: auth.watchActiveUserProfile(),
+      initialData: auth.user,
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            user == null) {
+          return const AppBackground(
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              body: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        _syncAuthSnapshot(auth, user);
+        if (user == null) {
+          _queueRoleResolution(null);
+          return const AppBackground(
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              body: Center(child: Text('Sign in to continue.')),
+            ),
+          );
+        }
+        if (_resolvedUserId != user.id || _resolvedIsAdmin != user.isAdmin) {
+          _queueRoleResolution(user);
+          return const AppBackground(
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              body: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+        if (user.isAdmin && _previewUserUi) {
+          final selectedPreviewIndex = _userPreviewIndex.clamp(0, 3).toInt();
+          return _UserShell(
+            user: user,
+            index: selectedPreviewIndex,
+            previewing: true,
+            onIndexChanged: (i) => setState(() => _userPreviewIndex = i),
+            onExitPreview: () => setState(() => _previewUserUi = false),
+          );
+        }
+        final maxIndex = user.isAdmin ? 4 : 3;
+        final selectedIndex = _index.clamp(0, maxIndex).toInt();
+        return user.isAdmin
+            ? _AdminShell(
+                user: user,
+                index: selectedIndex,
+                previewUserUi: _previewUserUi,
+                onPreviewUserUiChanged: (value) =>
+                    setState(() => _previewUserUi = value),
+                onIndexChanged: (i) => setState(() => _index = i),
+              )
+            : _UserShell(
+                user: user,
+                index: selectedIndex,
+                onIndexChanged: (i) => setState(() => _index = i),
+              );
+      },
+    );
+  }
+
+  void _syncAuthSnapshot(AuthProvider auth, AppUser? user) {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      auth.syncProfileSnapshot(user);
+    });
+  }
+
+  void _queueRoleResolution(AppUser? user) {
+    if (_roleResolutionQueued) return;
+    _roleResolutionQueued = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _resolvedUserId = user?.id;
+        _resolvedIsAdmin = user?.isAdmin;
+        _roleResolutionQueued = false;
+      });
+    });
+  }
+}
+
+class _AdminShell extends StatelessWidget {
+  const _AdminShell({
+    required this.user,
+    required this.index,
+    required this.previewUserUi,
+    required this.onPreviewUserUiChanged,
+    required this.onIndexChanged,
+  });
+
+  final AppUser user;
+  final int index;
+  final bool previewUserUi;
+  final ValueChanged<bool> onPreviewUserUiChanged;
+  final ValueChanged<int> onIndexChanged;
+
+  @override
+  Widget build(BuildContext context) {
     final pages = [
-      _HomeTab(),
-      const _AreasTab(),
+      const _UserRegistrationTab(),
+      const _AccessControlZonesTab(),
       const _LogsTab(),
+      _HomeTab(user: user),
       const _SettingsTab(),
+    ];
+    final labels = const [
+      'Identity Management',
+      'Access Control Zones',
+      'Audit Trails',
+      'Reports & Exports',
+      'Timing Windows',
     ];
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
-          title: const Text('FaceKey'),
+          title: Text(labels[index]),
           actions: [
             Consumer<AlertProvider>(
               builder: (context, alerts, _) {
                 final count = alerts.unreadCount;
                 return IconButton(
                   onPressed: () =>
-                      Navigator.pushNamed(context, NotificationsScreen.route),
+                      _pushNamedAfterFrame(context, NotificationsScreen.route),
                   icon: Badge(
                     isLabelVisible: count > 0,
                     label: Text(count > 99 ? '99+' : '$count'),
@@ -80,22 +228,281 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-        body: pages[_index],
+        drawer: _AdminNavigationDrawer(
+          user: user,
+          selectedIndex: index,
+          previewUserUi: previewUserUi,
+          onPreviewUserUiChanged: onPreviewUserUiChanged,
+          onDestinationSelected: (i) {
+            SchedulerBinding.instance.addPostFrameCallback((_) {
+              if (!context.mounted) return;
+              Navigator.pop(context);
+              onIndexChanged(i);
+            });
+          },
+        ),
+        body: pages[index],
+      ),
+    );
+  }
+}
+
+class _AdminNavigationDrawer extends StatelessWidget {
+  const _AdminNavigationDrawer({
+    required this.user,
+    required this.selectedIndex,
+    required this.previewUserUi,
+    required this.onPreviewUserUiChanged,
+    required this.onDestinationSelected,
+  });
+
+  final AppUser user;
+  final int selectedIndex;
+  final bool previewUserUi;
+  final ValueChanged<bool> onPreviewUserUiChanged;
+  final ValueChanged<int> onDestinationSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: _AdminProfileCard(user: user),
+            ),
+            Expanded(
+              child: NavigationDrawer(
+                selectedIndex: selectedIndex,
+                onDestinationSelected: onDestinationSelected,
+                children: [
+                  const _DrawerGroupLabel('Identity & Enrollment'),
+                  const NavigationDrawerDestination(
+                    icon: Icon(Icons.manage_accounts_rounded),
+                    label: Text('Identity Management'),
+                  ),
+                  const SizedBox(height: 12),
+                  const _DrawerGroupLabel('Security & Zones'),
+                  const NavigationDrawerDestination(
+                    icon: Icon(Icons.rule_folder_rounded),
+                    label: Text('Access Control Zones'),
+                  ),
+                  const NavigationDrawerDestination(
+                    icon: Icon(Icons.history_rounded),
+                    label: Text('Audit Trails'),
+                  ),
+                  const SizedBox(height: 12),
+                  const _DrawerGroupLabel('Advanced Utilities'),
+                  const NavigationDrawerDestination(
+                    icon: Icon(Icons.ios_share_rounded),
+                    label: Text('Reports & Exports'),
+                  ),
+                  const NavigationDrawerDestination(
+                    icon: Icon(Icons.schedule_rounded),
+                    label: Text('Timing Windows'),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            SwitchListTile(
+              contentPadding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              secondary: const Icon(Icons.preview_rounded),
+              title: const Text('Preview User UI'),
+              subtitle: const Text('Verify hub, ID, and activity logs'),
+              value: previewUserUi,
+              onChanged: (value) {
+                SchedulerBinding.instance.addPostFrameCallback((_) {
+                  if (!context.mounted) return;
+                  Navigator.pop(context);
+                  onPreviewUserUiChanged(value);
+                });
+              },
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: Icon(
+                Icons.logout_rounded,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: Text(
+                'Logout',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              onTap: () async {
+                final auth = context.read<AuthProvider>();
+                final ok = await auth.logout();
+                if (!ok || !context.mounted) return;
+                _pushAndClearAfterFrame(context, WelcomeScreen.route);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminProfileCard extends StatelessWidget {
+  const _AdminProfileCard({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final id = user.identityNumber.trim().isEmpty
+        ? user.id
+        : user.identityNumber.trim();
+    return GlassCard(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      child: Row(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              _FaceAvatar(user: user),
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF32D583),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.surface,
+                      width: 2,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  user.name.isEmpty ? 'Administrator' : user.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  id,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.circle,
+                      size: 8,
+                      color: Color(0xFF32D583),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Online',
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DrawerGroupLabel extends StatelessWidget {
+  const _DrawerGroupLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 18, 16, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0,
+            ),
+      ),
+    );
+  }
+}
+
+class _UserShell extends StatelessWidget {
+  const _UserShell({
+    required this.user,
+    required this.index,
+    required this.onIndexChanged,
+    this.previewing = false,
+    this.onExitPreview,
+  });
+
+  final AppUser user;
+  final int index;
+  final ValueChanged<int> onIndexChanged;
+  final bool previewing;
+  final VoidCallback? onExitPreview;
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = [
+      _PersonalHubTab(
+        user: user,
+        onOpenActivity: () => onIndexChanged(1),
+        onOpenAccess: () => onIndexChanged(2),
+      ),
+      _MyActivityTab(user: user),
+      _AccessPermissionsTab(user: user),
+      _SettingsTab(user: user),
+    ];
+    return AppBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          title: Text(previewing ? 'User UI Preview' : 'Student Passport'),
+          leading: previewing
+              ? IconButton(
+                  tooltip: 'Back to admin drawer',
+                  onPressed: onExitPreview,
+                  icon: const Icon(Icons.visibility_rounded),
+                )
+              : null,
+        ),
+        body: pages[index],
         bottomNavigationBar: NavigationBar(
-          selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
+          selectedIndex: index,
+          onDestinationSelected: onIndexChanged,
           destinations: const [
             NavigationDestination(
-              icon: Icon(Icons.home_rounded),
-              label: 'Home',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.meeting_room_rounded),
-              label: 'Areas',
+              icon: Icon(Icons.badge_rounded),
+              label: 'Passport',
             ),
             NavigationDestination(
               icon: Icon(Icons.history_rounded),
-              label: 'Logs',
+              label: 'Activity',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.verified_user_rounded),
+              label: 'Access',
             ),
             NavigationDestination(
               icon: Icon(Icons.settings_rounded),
@@ -108,13 +515,879 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+class _UserRegistrationTab extends StatefulWidget {
+  const _UserRegistrationTab();
+
+  @override
+  State<_UserRegistrationTab> createState() => _UserRegistrationTabState();
+}
+
+class _UserRegistrationTabState extends State<_UserRegistrationTab> {
+  final _firebase = FirebaseService();
+  final _form = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _identityNumber = TextEditingController();
+  final _email = TextEditingController();
+  final _department = TextEditingController();
+  final _phone = TextEditingController();
+  String _role = 'User';
+  int _accessLevel = 1;
+  String? _room;
+  AppUser? _editing;
+  bool _saving = false;
+  bool _sendingSetupEmail = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _identityNumber.dispose();
+    _email.dispose();
+    _department.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final areas = context.watch<AreaProvider>().areas;
+    final roomOptions = areas
+        .map((area) => area.name.trim().isEmpty
+            ? '${area.floor} - Room ${area.roomNumber}'
+            : area.name.trim())
+        .toSet()
+        .toList()
+      ..sort();
+    final selectedRoom = _room != null && roomOptions.contains(_room)
+        ? _room
+        : (roomOptions.isEmpty ? null : roomOptions.first);
+    if (_room != selectedRoom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _room = selectedRoom);
+      });
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        GlassCard(
+          child: Form(
+            key: _form,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _editing == null ? 'Register User' : 'Update User',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _name,
+                  decoration: const InputDecoration(labelText: 'Full Name'),
+                  validator: _required,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _identityNumber,
+                  decoration: const InputDecoration(
+                    labelText: 'Matric or Staff ID',
+                  ),
+                  validator: _required,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _email,
+                  decoration: const InputDecoration(labelText: 'Email'),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _department,
+                  decoration: const InputDecoration(labelText: 'Department'),
+                  validator: _required,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _phone,
+                  decoration: const InputDecoration(labelText: 'Phone'),
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _role,
+                        decoration: const InputDecoration(labelText: 'Role'),
+                        items: const [
+                          DropdownMenuItem(value: 'User', child: Text('User')),
+                          DropdownMenuItem(value: 'Admin', child: Text('Admin')),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) setState(() => _role = value);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<int>(
+                        initialValue: _accessLevel,
+                        decoration:
+                            const InputDecoration(labelText: 'Access Level'),
+                        items: const [
+                          DropdownMenuItem(value: 1, child: Text('Level 1')),
+                          DropdownMenuItem(value: 2, child: Text('Level 2')),
+                          DropdownMenuItem(value: 3, child: Text('Level 3')),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _accessLevel = value);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (selectedRoom == null)
+                  const Text('Add a room before assigning access.')
+                else
+                  DropdownButtonFormField<String>(
+                    key: ValueKey('managed-room-$selectedRoom'),
+                    initialValue: selectedRoom,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Primary Room'),
+                    items: roomOptions
+                        .map(
+                          (room) => DropdownMenuItem(
+                            value: room,
+                            child: Text(
+                              room,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => setState(() => _room = value),
+                  ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: Icon(_editing == null
+                      ? Icons.person_add_rounded
+                      : Icons.save_rounded),
+                  label: Text(_saving
+                      ? 'Saving'
+                      : (_editing == null ? 'Create Profile' : 'Save Changes')),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _sendingSetupEmail
+                      ? null
+                      : () => _sendSetupEmail(_email.text),
+                  icon: const Icon(Icons.mark_email_read_rounded),
+                  label: Text(
+                    _sendingSetupEmail
+                        ? 'Sending Setup Email'
+                        : 'Send Setup Email',
+                  ),
+                ),
+                if (_editing != null) ...[
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: _saving ? null : _clearForm,
+                    child: const Text('Cancel Editing'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        StreamBuilder<List<AppUser>>(
+          stream: _firebase.watchAllUsers(),
+          builder: (context, snapshot) {
+            final users = snapshot.data ?? const <AppUser>[];
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                users.isEmpty) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            return Column(
+              children: [
+                for (final user in users)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: GlassCard(
+                      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: CircleAvatar(
+                          child: Icon(user.hasFace
+                              ? Icons.face_rounded
+                              : Icons.person_rounded),
+                        ),
+                        title: Text(
+                          user.name.isEmpty ? 'Unnamed profile' : user.name,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        subtitle: Text(
+                          '${user.identityNumber.isEmpty ? user.id : user.identityNumber} - ${user.role} - Level ${user.accessLevel}\n${user.room}',
+                        ),
+                        isThreeLine: true,
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (value) => _handleUserAction(value, user),
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(
+                              value: 'face',
+                              child: Text('Capture Face'),
+                            ),
+                            PopupMenuItem(
+                              value: 'setup',
+                              child: Text('Send Setup Email'),
+                            ),
+                            PopupMenuItem(
+                              value: 'delete',
+                              child: Text('Delete'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Future<void> _save() async {
+    if (!_form.currentState!.validate()) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _saving = true);
+    try {
+      final room = _room?.trim() ?? '';
+      final editing = _editing;
+      if (editing == null) {
+        await _firebase.createManagedUser(
+          name: _name.text,
+          identityNumber: _identityNumber.text,
+          email: _email.text,
+          department: _department.text,
+          phone: _phone.text,
+          room: room,
+          role: _role,
+          accessLevel: _accessLevel,
+        );
+      } else {
+        await _firebase.updateUserProfile(
+          editing.copyWith(
+            name: _name.text,
+            identityNumber: _identityNumber.text,
+            email: _email.text,
+            department: _department.text,
+            phone: _phone.text,
+            room: room,
+            role: _role,
+            accessLevel: _accessLevel,
+          ),
+        );
+      }
+      if (!mounted) return;
+      _clearForm();
+      messenger.showSnackBar(const SnackBar(content: Text('User saved.')));
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Unable to save user: $e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _handleUserAction(String value, AppUser user) {
+    if (value == 'edit') {
+      setState(() {
+        _editing = user;
+        _name.text = user.name;
+        _identityNumber.text = user.identityNumber;
+        _email.text = user.email;
+        _department.text = user.department;
+        _phone.text = user.phone;
+        _role = user.isAdmin ? 'Admin' : 'User';
+        _accessLevel = user.accessLevel.clamp(1, 3);
+        _room = user.room;
+      });
+      return;
+    }
+    if (value == 'face') {
+      _pushNamedAfterFrame(
+        context,
+        FaceRegistrationScreen.route,
+        arguments: FaceRegistrationArgs(user: user),
+      );
+      return;
+    }
+    if (value == 'setup') {
+      _sendSetupEmail(user.email);
+      return;
+    }
+    _confirmDelete(user);
+  }
+
+  Future<void> _sendSetupEmail(String email) async {
+    final target = email.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    if (target.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Enter an email before sending setup.')),
+      );
+      return;
+    }
+    setState(() => _sendingSetupEmail = true);
+    try {
+      await _firebase.sendSetupEmail(target);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Setup email sent to $target.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Unable to send setup email: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sendingSetupEmail = false);
+    }
+  }
+
+  Future<void> _confirmDelete(AppUser user) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete User'),
+        content: Text('Remove ${user.name.isEmpty ? 'this user' : user.name}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _firebase.deleteManagedUser(user.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('User removed.')),
+    );
+  }
+
+  void _clearForm() {
+    _form.currentState?.reset();
+    setState(() {
+      _editing = null;
+      _name.clear();
+      _identityNumber.clear();
+      _email.clear();
+      _department.clear();
+      _phone.clear();
+      _role = 'User';
+      _accessLevel = 1;
+    });
+  }
+
+  static String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
+}
+
+class _PersonalHubTab extends StatelessWidget {
+  const _PersonalHubTab({
+    required this.user,
+    required this.onOpenActivity,
+    required this.onOpenAccess,
+  });
+
+  final AppUser user;
+  final VoidCallback onOpenActivity;
+  final VoidCallback onOpenAccess;
+
+  @override
+  Widget build(BuildContext context) {
+    final assignedZone = user.room.trim().isEmpty ? 'Not assigned' : user.room;
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        _StudentPassportHeader(user: user),
+        const SizedBox(height: 14),
+        GlassCard(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _FaceAvatar(user: user),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          user.name,
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.w900),
+                        ),
+                        Text(
+                          'Student Passport',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Matric No.',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelLarge
+                    ?.copyWith(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              SelectableText(
+                user.identityNumber.isEmpty ? user.id : user.identityNumber,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 18),
+              _PassportProfileField(
+                label: 'Course',
+                value: user.course.trim().isEmpty
+                    ? user.department
+                    : user.course,
+              ),
+              const SizedBox(height: 10),
+              _PassportProfileField(
+                label: 'Faculty',
+                value: user.faculty.trim().isEmpty ? 'FSKTM' : user.faculty,
+              ),
+              const SizedBox(height: 10),
+              _PassportProfileField(
+                label: 'Current Semester',
+                value: user.currentSemester.trim().isEmpty
+                    ? 'Semester ${user.accessLevel}'
+                    : user.currentSemester,
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _StatusBadge(
+                    icon: Icons.shield_rounded,
+                    label: user.hasFace
+                        ? 'Biometrics: Verified'
+                        : 'Biometrics: Pending',
+                    color: user.hasFace
+                        ? const Color(0xFF32D583)
+                        : Theme.of(context).colorScheme.error,
+                  ),
+                  _StatusBadge(
+                    icon: Icons.location_on_rounded,
+                    label: 'Assigned Zone: $assignedZone',
+                    color: const Color(0xFF5B8DEF),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'Quick Actions',
+          style: Theme.of(context)
+              .textTheme
+              .titleMedium
+              ?.copyWith(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 10),
+        GridView.count(
+          crossAxisCount: 2,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.7,
+          children: [
+            _QuickActionTile(
+              icon: Icons.history_rounded,
+              label: 'Access History',
+              onTap: onOpenActivity,
+            ),
+            _QuickActionTile(
+              icon: Icons.verified_user_rounded,
+              label: 'My Zones',
+              onTap: onOpenAccess,
+            ),
+            _QuickActionTile(
+              icon: Icons.face_retouching_natural_rounded,
+              label: 'Re-enroll Face',
+              onTap: () =>
+                  _pushNamedAfterFrame(context, FaceRegistrationScreen.route),
+            ),
+            _QuickActionTile(
+              icon: Icons.edit_rounded,
+              label: 'Edit Profile',
+              onTap: () =>
+                  _pushNamedAfterFrame(context, EditProfileScreen.route),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _StudentPassportHeader extends StatelessWidget {
+  const _StudentPassportHeader({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      child: StreamBuilder<DateTime>(
+        stream: Stream.periodic(
+          const Duration(seconds: 1),
+          (_) => DateTime.now(),
+        ),
+        initialData: DateTime.now(),
+        builder: (context, snapshot) {
+          final now = snapshot.data ?? DateTime.now();
+          return Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hello, ${user.name.isEmpty ? 'Student' : user.name}!',
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Welcome to your UTHM campus identity portal.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    DateFormat.Hm().format(now),
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineMedium
+                        ?.copyWith(fontWeight: FontWeight.w900),
+                  ),
+                  Text(
+                    DateFormat('EEEE, d MMMM yyyy').format(now),
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PassportProfileField extends StatelessWidget {
+  const _PassportProfileField({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 130,
+          child: Text(
+            label,
+            style: Theme.of(context)
+                .textTheme
+                .labelLarge
+                ?.copyWith(fontWeight: FontWeight.w900),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value.trim().isEmpty ? 'Not provided' : value,
+            style: Theme.of(context)
+                .textTheme
+                .bodyLarge
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      avatar: Icon(icon, color: color, size: 18),
+      label: Text(label),
+      side: BorderSide(color: color.withValues(alpha: .45)),
+    );
+  }
+}
+
+class _QuickActionTile extends StatelessWidget {
+  const _QuickActionTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.tonalIcon(
+      onPressed: onTap,
+      icon: Icon(icon),
+      label: Text(
+        label,
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
+class _MyActivityTab extends StatelessWidget {
+  const _MyActivityTab({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<AccessLog>>(
+      stream: FirebaseService().watchUserLogs(user.id),
+      builder: (context, snapshot) {
+        final logs = snapshot.data ?? const <AccessLog>[];
+        if (snapshot.connectionState == ConnectionState.waiting && logs.isEmpty) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (logs.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.all(18),
+            children: const [
+              _UserSectionHeader(
+                title: 'Personal Access History',
+                subtitle: 'Your private campus entry record',
+              ),
+              SizedBox(height: 120),
+              Center(child: Text('No activity yet.')),
+            ],
+          );
+        }
+        return ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            const _UserSectionHeader(
+              title: 'Personal Access History',
+              subtitle: 'Your private campus entry record',
+            ),
+            const SizedBox(height: 12),
+            for (final log in logs)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _LogCard(
+                  log: log,
+                  onSnapshot: () {},
+                  showSnapshotAction: false,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _UserSectionHeader extends StatelessWidget {
+  const _UserSectionHeader({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: Theme.of(context)
+              .textTheme
+              .titleLarge
+              ?.copyWith(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          subtitle,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AccessPermissionsTab extends StatelessWidget {
+  const _AccessPermissionsTab({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final areas = context.watch<AreaProvider>().areas;
+    final allowed = areas.where(user.canAccessArea).toList();
+    final denied = areas.where((area) => !user.canAccessArea(area)).toList();
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        GlassCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Current Access',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              Text('Role: ${user.role}'),
+              Text('Access level: ${user.accessLevel}'),
+              Text('Primary room: ${user.room.isEmpty ? 'Not assigned' : user.room}'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'Allowed Rooms',
+          style: Theme.of(context)
+              .textTheme
+              .titleMedium
+              ?.copyWith(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 8),
+        if (allowed.isEmpty)
+          const Text('No room access is currently assigned.')
+        else
+          for (final area in allowed)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _AreaPermissionTile(area: area, allowed: true),
+            ),
+        const SizedBox(height: 8),
+        Text(
+          'View Only',
+          style: Theme.of(context)
+              .textTheme
+              .titleMedium
+              ?.copyWith(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 8),
+        for (final area in denied)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _AreaPermissionTile(area: area, allowed: false),
+          ),
+      ],
+    );
+  }
+}
+
+class _AreaPermissionTile extends StatelessWidget {
+  const _AreaPermissionTile({required this.area, required this.allowed});
+
+  final Area area;
+  final bool allowed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(
+          allowed ? Icons.check_circle_rounded : Icons.lock_rounded,
+          color: allowed ? const Color(0xFF32D583) : null,
+        ),
+        title: Text(
+          area.name,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text('${area.location} - ${area.floor} - Room ${area.roomNumber}'),
+      ),
+    );
+  }
+}
+
 class _HomeTab extends StatelessWidget {
+  const _HomeTab({required this.user});
+
+  final AppUser user;
+
   @override
   Widget build(BuildContext context) {
     final logs = context.watch<LogProvider>().logs;
     final logProvider = context.watch<LogProvider>();
     final system = context.watch<SystemProvider>();
-    final user = context.watch<AuthProvider>().user;
     final areas = context.watch<AreaProvider>().areas;
     final occupied = areas.fold<int>(
       0,
@@ -126,7 +1399,7 @@ class _HomeTab extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       children: [
         _ConsoleHeader(
-          name: user?.name ?? 'Administrator',
+          name: user.name.isEmpty ? 'Administrator' : user.name,
           lockdown: system.settings.globalLockdown,
           syncing: logProvider.syncing,
           pending: logProvider.pendingCount,
@@ -258,7 +1531,7 @@ class _HomeTab extends StatelessWidget {
             Expanded(
               child: FilledButton(
                 onPressed: () =>
-                    Navigator.pushNamed(context, AddAreaScreen.route),
+                    _pushNamedAfterFrame(context, AddAreaScreen.route),
                 child: const Text('Add Area'),
               ),
             ),
@@ -266,7 +1539,7 @@ class _HomeTab extends StatelessWidget {
             Expanded(
               child: FilledButton.tonal(
                 onPressed: () => _exportUserData(context),
-                child: const Text('Export User Data'),
+                child: const Text('Export Clean CSV'),
               ),
             ),
           ],
@@ -278,7 +1551,7 @@ class _HomeTab extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         FilledButton.tonal(
-          onPressed: () => Navigator.pushNamed(context, FaceLoginScreen.route),
+          onPressed: () => _pushNamedAfterFrame(context, FaceLoginScreen.route),
           child: const Text('Run Access Scan'),
         ),
       ],
@@ -309,8 +1582,8 @@ class _HomeTab extends StatelessWidget {
       await SharePlus.instance.share(
         ShareParams(
           files: [XFile(file.path)],
-          subject: 'FAZEKEY Security Report',
-          text: 'FAZEKEY security report',
+          subject: 'Campus Access Security Report',
+          text: 'Campus access security report',
         ),
       );
       if (!context.mounted) return;
@@ -335,14 +1608,14 @@ class _HomeTab extends StatelessWidget {
       if (!context.mounted) return;
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('User data export saved and ready to share.'),
+          content: Text('Clean user export is ready to share.'),
         ),
       );
       await SharePlus.instance.share(
         ShareParams(
           files: [XFile(file.path)],
-          subject: 'FAZEKEY User Data Export',
-          text: 'FAZEKEY user data export',
+          subject: 'Campus Access User Data Export',
+          text: 'Campus access user data export',
         ),
       );
     } catch (e) {
@@ -551,86 +1824,228 @@ class _ReportSummary extends StatelessWidget {
   }
 }
 
-class _AreasTab extends StatelessWidget {
-  const _AreasTab();
+const _zoneStatusColor = Color(0xFF5B8DEF);
 
-  static const _normalStatusColor = Color(0xFF5B8DEF);
+class _AccessControlZonesTab extends StatelessWidget {
+  const _AccessControlZonesTab();
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AreaProvider>();
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route),
-        label: const Text('Add Area'),
-      ),
-      body: RefreshIndicator(
-        onRefresh: provider.refresh,
-        child: ListView.separated(
-          padding: const EdgeInsets.all(18),
-          itemCount: provider.areas.length,
-          separatorBuilder: (_, index) => const SizedBox(height: 12),
-          itemBuilder: (_, i) {
-            final area = provider.areas[i];
-            final capacity = area.capacity <= 0 ? 1 : area.capacity;
-            final occupancyValue = (area.currentOccupancy / capacity).clamp(
-              0.0,
-              1.0,
-            );
-            return Opacity(
-              opacity: area.active ? 1 : .5,
-              child: GlassCard(
-                padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-                child: Column(
-                  children: [
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(
-                        area.name,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      subtitle: Text(
-                        '${area.location} - ${area.floor} - Room ${area.roomNumber}\n'
-                        'Occupancy ${area.currentOccupancy}${area.capacity > 0 ? ' / ${area.capacity}' : ''}\n'
-                        'Roles: ${area.allowedRoles.isEmpty ? 'All' : area.allowedRoles.join(', ')}',
-                      ),
-                      isThreeLine: true,
-                      trailing: Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Switch(
-                            value: area.active,
-                            onChanged: (value) => provider.updateArea(
-                              area.copyWith(active: value),
-                            ),
-                          ),
-                        ],
-                      ),
+    return StreamBuilder<List<AppUser>>(
+      stream: FirebaseService().watchAllUsers(),
+      builder: (context, snapshot) {
+        final users = snapshot.data ?? const <AppUser>[];
+        return Scaffold(
+          backgroundColor: Colors.transparent,
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () => _pushNamedAfterFrame(context, AddAreaScreen.route),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Add Zone'),
+          ),
+          body: RefreshIndicator(
+            onRefresh: provider.refresh,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(18),
+              itemCount: provider.areas.length,
+              separatorBuilder: (_, index) => const SizedBox(height: 12),
+              itemBuilder: (_, i) {
+                final area = provider.areas[i];
+                return _ZoneAclCard(
+                  area: area,
+                  users: users,
+                  loadingUsers:
+                      snapshot.connectionState == ConnectionState.waiting,
+                  provider: provider,
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ZoneAclCard extends StatelessWidget {
+  const _ZoneAclCard({
+    required this.area,
+    required this.users,
+    required this.loadingUsers,
+    required this.provider,
+  });
+
+  final Area area;
+  final List<AppUser> users;
+  final bool loadingUsers;
+  final AreaProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final capacity = area.capacity <= 0 ? 1 : area.capacity;
+    final occupancyValue = (area.currentOccupancy / capacity).clamp(0.0, 1.0);
+    final highSecurity = _isHighSecurity(area);
+    return Opacity(
+      opacity: area.active ? 1 : .5,
+      child: GlassCard(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
+        child: Column(
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      area.name,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(99),
-                      child: LinearProgressIndicator(
-                        value: occupancyValue,
-                        minHeight: 4,
-                        backgroundColor: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest
-                            .withValues(alpha: .58),
-                        valueColor: const AlwaysStoppedAnimation<Color>(
-                          _normalStatusColor,
-                        ),
-                      ),
+                  ),
+                  if (highSecurity)
+                    const Chip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text('High security'),
                     ),
-                  ],
-                ),
+                ],
               ),
-            );
-          },
+              subtitle: Text(
+                '${area.location} - ${area.floor} - Room ${area.roomNumber}\n'
+                'Occupancy ${area.currentOccupancy}${area.capacity > 0 ? ' / ${area.capacity}' : ''}\n'
+                'Roles: ${area.allowedRoles.isEmpty ? 'All' : area.allowedRoles.join(', ')}',
+              ),
+              isThreeLine: true,
+              trailing: Switch(
+                value: area.active,
+                onChanged: (value) =>
+                    provider.updateArea(area.copyWith(active: value)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: occupancyValue,
+                minHeight: 4,
+                backgroundColor: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: .58),
+                valueColor:
+                    const AlwaysStoppedAnimation<Color>(_zoneStatusColor),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(top: 4),
+              leading: const Icon(Icons.assignment_ind_rounded),
+              title: const Text('Access Control List'),
+              subtitle: Text(
+                '${area.allowedUserIds.length} granted, ${area.revokedUserIds.length} revoked',
+              ),
+              children: [
+                if (loadingUsers)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(),
+                  )
+                else if (users.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(0, 8, 0, 16),
+                    child: Text('No users are available for ACL assignment.'),
+                  )
+                else
+                  for (final user in users)
+                    _AclUserTile(
+                      area: area,
+                      user: user,
+                      onGrant: () => _grant(user),
+                      onRevoke: () => _revoke(user),
+                    ),
+              ],
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  bool _isHighSecurity(Area area) {
+    final name = '${area.name} ${area.roomNumber}'.toLowerCase();
+    return name.contains('it') ||
+        name.contains('server') ||
+        name.contains('security') ||
+        name.contains('restricted');
+  }
+
+  Future<void> _grant(AppUser user) {
+    final allowed = {...area.allowedUserIds, user.id}.toList()..sort();
+    final revoked = area.revokedUserIds.where((id) => id != user.id).toList();
+    return provider.updateArea(
+      area.copyWith(allowedUserIds: allowed, revokedUserIds: revoked),
+    );
+  }
+
+  Future<void> _revoke(AppUser user) {
+    final allowed = area.allowedUserIds.where((id) => id != user.id).toList();
+    final revoked = {...area.revokedUserIds, user.id}.toList()..sort();
+    return provider.updateArea(
+      area.copyWith(allowedUserIds: allowed, revokedUserIds: revoked),
+    );
+  }
+}
+
+class _AclUserTile extends StatelessWidget {
+  const _AclUserTile({
+    required this.area,
+    required this.user,
+    required this.onGrant,
+    required this.onRevoke,
+  });
+
+  final Area area;
+  final AppUser user;
+  final VoidCallback onGrant;
+  final VoidCallback onRevoke;
+
+  @override
+  Widget build(BuildContext context) {
+    final explicitlyGranted = area.allowedUserIds.contains(user.id);
+    final explicitlyRevoked = area.revokedUserIds.contains(user.id);
+    final effectiveAccess = user.canAccessArea(area);
+    final statusColor = explicitlyRevoked
+        ? Theme.of(context).colorScheme.error
+        : effectiveAccess
+            ? const Color(0xFF32D583)
+            : Theme.of(context).colorScheme.onSurfaceVariant;
+    final id = user.identityNumber.isEmpty ? user.id : user.identityNumber;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(Icons.person_pin_rounded, color: statusColor),
+      title: Text(user.name.isEmpty ? 'Unnamed profile' : user.name),
+      subtitle: Text(
+        '$id - ${_aclStatus(explicitlyGranted, explicitlyRevoked, effectiveAccess)}',
+      ),
+      trailing: Wrap(
+        spacing: 6,
+        children: [
+          TextButton(
+            onPressed: explicitlyGranted ? null : onGrant,
+            child: const Text('Grant'),
+          ),
+          TextButton(
+            onPressed: explicitlyRevoked ? null : onRevoke,
+            child: const Text('Revoke'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _aclStatus(bool granted, bool revoked, bool effectiveAccess) {
+    if (granted) return 'Explicitly granted';
+    if (revoked) return 'Revoked';
+    return effectiveAccess ? 'Allowed by policy' : 'No access';
   }
 }
 
@@ -785,10 +2200,15 @@ class _LogsTabState extends State<_LogsTab> {
 }
 
 class _LogCard extends StatelessWidget {
-  const _LogCard({required this.log, required this.onSnapshot});
+  const _LogCard({
+    required this.log,
+    required this.onSnapshot,
+    this.showSnapshotAction = true,
+  });
 
   final AccessLog log;
   final VoidCallback onSnapshot;
+  final bool showSnapshotAction;
 
   @override
   Widget build(BuildContext context) {
@@ -823,7 +2243,9 @@ class _LogCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    if (!log.granted && log.snapshotPath != null)
+                    if (showSnapshotAction &&
+                        !log.granted &&
+                        log.snapshotPath != null)
                       TextButton(
                         onPressed: onSnapshot,
                         child: const Text('View Snapshot'),
@@ -847,14 +2269,25 @@ class _LogCard extends StatelessWidget {
   }
 }
 
-class _SettingsTab extends StatelessWidget {
-  const _SettingsTab();
+class _SettingsTab extends StatefulWidget {
+  const _SettingsTab({this.user});
+
+  final AppUser? user;
+
+  @override
+  State<_SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<_SettingsTab> {
+  bool _accessAlerts = true;
+  bool _biometricAlerts = true;
+  bool _sosBusy = false;
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final system = context.watch<SystemProvider>();
-    final user = auth.user;
+    final activeUser = widget.user ?? auth.user;
     final settings = system.settings;
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -862,21 +2295,21 @@ class _SettingsTab extends StatelessWidget {
         GlassCard(
           child: Row(
             children: [
-              _FaceAvatar(user: user),
+              _FaceAvatar(user: activeUser),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      user?.name ?? 'Administrator',
+                      activeUser?.name ?? 'Administrator',
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w900,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      user?.email ?? '',
+                      activeUser?.email ?? '',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -887,44 +2320,94 @@ class _SettingsTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        GlassCard(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              SwitchListTile(
-                value: settings.afterHoursAlerts,
-                onChanged: system.toggleAfterHoursAlerts,
-                title: const Text('After Hours'),
-              ),
-              const Divider(height: 1),
-              SwitchListTile(
-                value: settings.intrusionAlerts,
-                onChanged: system.toggleIntrusionAlerts,
-                title: const Text('Intrusion Alerts'),
-              ),
-              const Divider(height: 1),
-              SwitchListTile(
-                value: settings.monitoringWindowLogging,
-                onChanged: system.toggleMonitoringWindowLogging,
-                title: const Text('Monitoring Window'),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                title: Text(
-                  'Access Window ${_time(settings.afterHoursStart)}-${_time(settings.afterHoursEnd)}',
+        if (!auth.isAdmin) ...[
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.face_retouching_natural_rounded),
+                  title: const Text('Re-enroll Face Data'),
+                  subtitle: const Text('Update your biometric access profile'),
+                  onTap: () =>
+                      _pushNamedAfterFrame(context, FaceRegistrationScreen.route),
                 ),
-                onTap: () => _showAccessWindow(context, system),
-              ),
-            ],
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.notifications_active_rounded),
+                  value: _accessAlerts,
+                  onChanged: (value) => setState(() => _accessAlerts = value),
+                  title: const Text('Real-time Access Alerts'),
+                  subtitle: const Text('Notify me when access events are logged'),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.security_rounded),
+                  value: _biometricAlerts,
+                  onChanged: (value) =>
+                      setState(() => _biometricAlerts = value),
+                  title: const Text('Biometric Status Alerts'),
+                  subtitle: const Text('Notify me about enrollment changes'),
+                ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFE11D48),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+            onPressed: _sosBusy || activeUser == null
+                ? null
+                : () => _raiseCampusSos(context, activeUser),
+            icon: const Icon(Icons.sos_rounded),
+            label: Text(_sosBusy ? 'Sending SOS' : 'Campus Emergency SOS'),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (auth.isAdmin) ...[
+          GlassCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                SwitchListTile(
+                  value: settings.afterHoursAlerts,
+                  onChanged: system.toggleAfterHoursAlerts,
+                  title: const Text('After Hours'),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: settings.intrusionAlerts,
+                  onChanged: system.toggleIntrusionAlerts,
+                  title: const Text('Intrusion Alerts'),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: settings.monitoringWindowLogging,
+                  onChanged: system.toggleMonitoringWindowLogging,
+                  title: const Text('Monitoring Window'),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  title: Text(
+                    'Access Window ${_time(settings.afterHoursStart)}-${_time(settings.afterHoursEnd)}',
+                  ),
+                  onTap: () => _showAccessWindow(context, system),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         _SettingTile(
           title: 'Edit Profile',
-          onTap: () => Navigator.of(
+          onTap: () => _pushNamedAfterFrame(
             context,
+            EditProfileScreen.route,
             rootNavigator: true,
-          ).pushNamed(EditProfileScreen.route),
+          ),
         ),
         _SettingTile(
           title: 'Change Password',
@@ -939,21 +2422,18 @@ class _SettingsTab extends StatelessWidget {
           onChanged: auth.toggleDarkMode,
           title: const Text('Dark Mode'),
         ),
-        FilledButton.tonal(
-          onPressed: auth.loading
-              ? null
-              : () async {
-                  final ok = await auth.logout();
-                  if (!ok) return;
-                  if (!context.mounted) return;
-                  Navigator.pushNamedAndRemoveUntil(
-                    context,
-                    WelcomeScreen.route,
-                    (_) => false,
-                  );
-                },
-          child: const Text('Logout'),
-        ),
+        if (!auth.isAdmin)
+          FilledButton.tonal(
+            onPressed: auth.loading
+                ? null
+                : () async {
+                    final ok = await auth.logout();
+                    if (!ok) return;
+                    if (!context.mounted) return;
+                    _pushAndClearAfterFrame(context, WelcomeScreen.route);
+                  },
+            child: const Text('Logout'),
+          ),
       ],
     );
   }
@@ -1058,6 +2538,40 @@ class _SettingsTab extends StatelessWidget {
     );
   }
 
+  Future<void> _raiseCampusSos(BuildContext context, AppUser user) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _sosBusy = true);
+    try {
+      await FirebaseService().addIncidentReport(
+        reporterId: user.id,
+        reporterName: user.name.isEmpty ? 'Student' : user.name,
+        title: 'Campus Emergency SOS',
+        severity: 'Critical',
+        areaName: user.room.isEmpty ? 'Student Passport' : user.room,
+        details:
+            'Emergency SOS triggered from the Student Passport settings panel.',
+      );
+      if (!context.mounted) return;
+      await context.read<AlertProvider>().raiseIntrusionAlert(
+            title: 'Campus Emergency SOS',
+            body:
+                '${user.name.isEmpty ? 'A student' : user.name} requested immediate assistance.',
+            severity: 'Critical',
+          );
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Campus emergency alert sent.')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Unable to send emergency alert: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _sosBusy = false);
+    }
+  }
+
   Future<void> _openHelpSupport(
     BuildContext context,
     String administratorEmail,
@@ -1066,12 +2580,12 @@ class _SettingsTab extends StatelessWidget {
     final uri = Uri(
       scheme: 'mailto',
       path: administratorEmail.trim().isEmpty
-          ? 'administrator@fazekey.app'
+          ? 'administrator@campus-access.local'
           : administratorEmail.trim(),
       queryParameters: const {
-        'subject': 'FAZEKEY Support Request',
+        'subject': 'Campus Access Support Request',
         'body':
-            'Hello Administrator,\r\n\r\nI need assistance with FAZEKEY.\r\n\r\nRegards,',
+            'Hello Administrator,\r\n\r\nI need assistance with campus access.\r\n\r\nRegards,',
       },
     );
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);

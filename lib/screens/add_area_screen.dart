@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/area.dart';
 import '../providers/area_provider.dart';
+import '../providers/auth_provider.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/primary_button.dart';
@@ -27,6 +28,23 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    if (auth.loading && auth.user == null) {
+      return const AppBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    if (!auth.isAdmin) {
+      return const AppBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(child: Text('Management access is unavailable.')),
+        ),
+      );
+    }
     final provider = context.watch<AreaProvider>();
     final areaName = '$_floor - Room $_room';
     return AppBackground(
@@ -204,6 +222,6 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
     'Information Security',
     'Multimedia',
   ];
-  static const _roles = ['Admin', 'Security', 'Staff'];
+  static const _roles = ['User', 'Admin', 'Security', 'Staff'];
   static const _capacities = [10, 25, 50, 75, 100];
 }

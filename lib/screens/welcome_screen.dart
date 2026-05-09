@@ -38,7 +38,7 @@ class WelcomeScreen extends StatelessWidget {
                     colors: [Color(0xFF22D3EE), Color(0xFFA855F7)],
                   ).createShader(bounds),
                   child: Text(
-                    'FaceKey',
+                    'Campus Access',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.montserrat(
                       textStyle: Theme.of(context).textTheme.displayLarge,
@@ -49,7 +49,7 @@ class WelcomeScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'A smart campus access control console for secure face-first entry.',
+                  'A smart campus access control console for secure entry.',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.inter(
                     textStyle: Theme.of(context).textTheme.titleLarge?.copyWith(

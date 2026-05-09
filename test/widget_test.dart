@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fazekey/main.dart' as app;
 import 'package:fazekey/models/access_log.dart';
+import 'package:fazekey/models/app_user.dart';
+import 'package:fazekey/models/area.dart';
 import 'package:fazekey/models/system_settings.dart';
 import 'package:fazekey/services/security_report_service.dart';
 
@@ -53,6 +55,80 @@ void main() {
     });
 
     expect(settings.shouldDenyScanAt(DateTime(2026, 5, 5, 13, 12)), isTrue);
+  });
+
+  test('admin role bypasses operational timing restrictions', () {
+    final settings = SystemSettings.defaults().copyWith(
+      afterHoursAlerts: true,
+    );
+    final afterHours = DateTime(2026, 5, 5, 13, 12);
+
+    expect(settings.shouldDenyScanForRole('user', afterHours), isTrue);
+    expect(settings.shouldDenyScanForRole('admin', afterHours), isFalse);
+    expect(settings.shouldDenyScanForRole('Admin', afterHours), isFalse);
+  });
+
+  test('area ACL explicit grant and revoke override broad policy', () {
+    final user = AppUser(
+      id: 'user-1',
+      identityNumber: 'AI220001',
+      name: 'Test User',
+      email: 'user@example.edu',
+      department: 'Software Engineering',
+      phone: '',
+      room: 'IT Room',
+      role: 'user',
+      createdAt: DateTime(2026),
+      hasFace: true,
+      accessLevel: 1,
+    );
+    final area = Area(
+      id: 'it-room',
+      name: 'IT Room',
+      location: 'FSKTM',
+      floor: 'Level 3',
+      roomNumber: '33',
+      active: true,
+      createdAt: DateTime(2026),
+      allowedDepartments: const ['Information Security'],
+      allowedRoles: const ['Security'],
+      currentOccupancy: 0,
+      capacity: 10,
+    );
+
+    expect(user.canAccessArea(area), isFalse);
+    expect(user.canAccessArea(area.copyWith(allowedUserIds: [user.id])), isTrue);
+    expect(
+      user.canAccessArea(
+        area.copyWith(
+          allowedUserIds: [user.id],
+          revokedUserIds: [user.id],
+        ),
+      ),
+      isFalse,
+    );
+  });
+
+  test('app user reads student passport fields from Firestore map', () {
+    final user = AppUser.fromMap('student-1', {
+      'name': 'Nur Aina',
+      'email': 'aina@example.edu',
+      'identityNumber': 'AI220001',
+      'course': 'Bachelor of Software Engineering',
+      'faculty': 'FSKTM',
+      'currentSemester': 'Semester 5',
+      'department': 'Software Engineering',
+      'phone': '',
+      'room': 'IT Room',
+      'role': 'user',
+      'hasFace': true,
+      'accessLevel': 3,
+    });
+
+    expect(user.identityNumber, 'AI220001');
+    expect(user.course, 'Bachelor of Software Engineering');
+    expect(user.faculty, 'FSKTM');
+    expect(user.currentSemester, 'Semester 5');
   });
 
   test('security report CSV sanitizes escaped and control characters', () {

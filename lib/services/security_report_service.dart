@@ -11,7 +11,7 @@ class SecurityReportService {
   Future<File> writeCsvReport(List<AccessLog> logs) async {
     final dir = await getApplicationDocumentsDirectory();
     final fileName =
-        'facekey-security-${DateFormat('yyyyMMdd-HHmmss').format(DateTime.now())}.csv';
+        'campus-access-security-${DateFormat('yyyyMMdd-HHmmss').format(DateTime.now())}.csv';
     final file = File(p.join(dir.path, fileName));
     await file.writeAsString(buildCsv(logs), flush: true);
     return file;

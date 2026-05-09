@@ -36,6 +36,7 @@ class FirebaseService {
     required String department,
     required String phone,
     required String room,
+    String identityNumber = '',
   }) async {
     final cred = await _authCall(
       () => auth.createUserWithEmailAndPassword(
@@ -51,6 +52,11 @@ class FirebaseService {
       phone: phone.trim(),
       room: room.trim(),
       role: 'admin',
+      identityNumber: identityNumber.trim(),
+      course: department.trim(),
+      faculty: 'FSKTM',
+      currentSemester: 'Semester 1',
+      accessLevel: 3,
       createdAt: DateTime.now(),
       hasFace: false,
     );
@@ -95,6 +101,17 @@ class FirebaseService {
     });
   }
 
+  Stream<List<AppUser>> watchAllUsers() {
+    return firestore
+        .collection('users')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(
+          (snap) =>
+              snap.docs.map((doc) => AppUser.fromMap(doc.id, doc.data())).toList(),
+        );
+  }
+
   Stream<AppUser?> watchCurrentUserProfile() {
     return authStateChanges().asyncExpand((user) {
       if (user == null) return Stream<AppUser?>.value(null);
@@ -121,11 +138,52 @@ class FirebaseService {
       'department': user.department.trim(),
       'phone': user.phone.trim(),
       'room': user.room.trim(),
-      'role': user.role.trim().isEmpty ? 'admin' : user.role.trim(),
+      'role': user.role.trim().isEmpty ? 'user' : user.role.trim(),
+      'identityNumber': user.identityNumber.trim(),
+      'course': user.course.trim(),
+      'faculty': user.faculty.trim(),
+      'currentSemester': user.currentSemester.trim(),
+      'accessLevel': user.accessLevel.clamp(1, 3),
       'createdAt': Timestamp.fromDate(user.createdAt),
       'hasFace': user.hasFace,
+      if (user.photoUrl?.trim().isNotEmpty == true) 'photoUrl': user.photoUrl,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<AppUser> createManagedUser({
+    required String name,
+    required String identityNumber,
+    required String email,
+    required String department,
+    required String phone,
+    required String room,
+    required String role,
+    required int accessLevel,
+  }) async {
+    final ref = firestore.collection('users').doc();
+    final user = AppUser(
+      id: ref.id,
+      name: name.trim(),
+      email: email.trim(),
+      department: department.trim(),
+      phone: phone.trim(),
+      room: room.trim(),
+      role: role.trim().isEmpty ? 'user' : role.trim(),
+      identityNumber: identityNumber.trim(),
+      course: department.trim(),
+      faculty: 'FSKTM',
+      currentSemester: 'Semester 1',
+      accessLevel: accessLevel.clamp(1, 3),
+      createdAt: DateTime.now(),
+      hasFace: false,
+    );
+    await ref.set(user.toMap());
+    return user;
+  }
+
+  Future<void> deleteManagedUser(String id) async {
+    await userRef(id).delete();
   }
 
   Future<void> saveFace(
@@ -145,6 +203,10 @@ class FirebaseService {
 
   Future<void> sendPasswordResetEmail(String email) {
     return _authCall(() => auth.sendPasswordResetEmail(email: email.trim()));
+  }
+
+  Future<void> sendSetupEmail(String email) {
+    return sendPasswordResetEmail(email);
   }
 
   Stream<List<Area>> watchAreas() => firestore
@@ -197,6 +259,20 @@ class FirebaseService {
                     .contains(q),
               )
               .toList();
+        });
+  }
+
+  Stream<List<AccessLog>> watchUserLogs(String userId, {int limit = 30}) {
+    return firestore
+        .collection('accessLogs')
+        .where('userId', isEqualTo: userId)
+        .limit(limit)
+        .snapshots()
+        .map((s) {
+          final logs =
+              s.docs.map((d) => AccessLog.fromMap(d.id, d.data())).toList()
+                ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+          return logs;
         });
   }
 
@@ -301,6 +377,11 @@ class FirebaseService {
     phone: user.phoneNumber ?? '',
     room: '',
     role: 'admin',
+    identityNumber: user.uid,
+    course: '',
+    faculty: 'FSKTM',
+    currentSemester: '',
+    accessLevel: 3,
     createdAt: DateTime.now(),
     hasFace: false,
   );
@@ -318,7 +399,7 @@ class FirebaseService {
         'Software Engineering',
         'Information Security',
       ],
-      allowedRoles: const ['Admin', 'Security', 'Staff'],
+      allowedRoles: const ['User', 'Admin', 'Security', 'Staff'],
       currentOccupancy: 0,
       capacity: 25,
     ),
@@ -331,9 +412,22 @@ class FirebaseService {
       active: true,
       createdAt: DateTime(2026, 1, 2),
       allowedDepartments: const ['Multimedia', 'Information Security'],
-      allowedRoles: const ['Admin', 'Security', 'Staff'],
+      allowedRoles: const ['User', 'Admin', 'Security', 'Staff'],
       currentOccupancy: 0,
       capacity: 25,
+    ),
+    'sample_level_3_it_room': Area(
+      id: 'sample_level_3_it_room',
+      name: 'IT Room',
+      location: 'FSKTM',
+      floor: 'Level 3',
+      roomNumber: '33',
+      active: true,
+      createdAt: DateTime(2026, 1, 3),
+      allowedDepartments: const ['Information Security'],
+      allowedRoles: const ['Admin', 'Security'],
+      currentOccupancy: 0,
+      capacity: 10,
     ),
   };
 }

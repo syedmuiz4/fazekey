@@ -2,12 +2,14 @@ import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
 import '../models/area.dart';
 import '../models/system_settings.dart';
 import '../providers/area_provider.dart';
 import '../providers/alert_provider.dart';
+import '../providers/auth_provider.dart';
 import '../providers/face_provider.dart';
 import '../providers/log_provider.dart';
 import '../services/firebase_service.dart';
@@ -29,6 +31,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
   FaceProvider? _faceProvider;
   String? _error;
   bool _busy = false;
+  bool _recognitionInFlight = false;
+  bool _disposeRequestedDuringRecognition = false;
+  bool _cameraReleaseStarted = false;
 
   @override
   void initState() {
@@ -44,6 +49,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
 
   Future<void> _initCamera() async {
     try {
+      _cameraReleaseStarted = false;
       final cameras = await availableCameras();
       final camera = cameras.firstWhere(
         (c) => c.lensDirection == CameraLensDirection.front,
@@ -76,6 +82,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     final faceProvider = context.read<FaceProvider>();
     final logProvider = context.read<LogProvider>();
     final alertProvider = context.read<AlertProvider>();
+    final authProvider = context.read<AuthProvider>();
     final scanArea = _scanArea(context.read<AreaProvider>().areas);
 
     try {
@@ -87,25 +94,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           scanArea: scanArea,
           system: system,
           reason: 'Global lockdown is active',
-          alertTitle: 'FAZEKEY Lockdown',
+          alertTitle: 'Access Lockdown',
           alertBody: 'Global lockdown denied an access attempt.',
           snackBarText: 'Intrusion alert: global lockdown denied access.',
-        );
-        return;
-      }
-
-      if (system.shouldDenyScanAt(DateTime.now())) {
-        await _denyAccess(
-          faceProvider: faceProvider,
-          logProvider: logProvider,
-          alertProvider: alertProvider,
-          scanArea: scanArea,
-          system: system,
-          reason: 'Access denied outside the active access window',
-          alertTitle: 'Access Denied',
-          alertBody:
-              'An access attempt was blocked outside the active access window.',
-          snackBarText: 'Access denied outside the active access window.',
         );
         return;
       }
@@ -119,17 +110,27 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       }
 
       final file = await controller.takePicture();
-      await _disposeCamera();
       final snapshotPath = file.path;
 
+      _recognitionInFlight = true;
       final user = await faceProvider.identify(file);
-      final hasAccess =
+      final timingDenied = system.shouldDenyScanForRole(
+        user?.role,
+        DateTime.now(),
+      );
+      final areaAllowed =
           user != null && (scanArea == null || user.canAccessArea(scanArea));
+      final hasAccess = user != null && !timingDenied && areaAllowed;
+      if (hasAccess) {
+        authProvider.completeFaceLogin(user);
+      }
       final reason = user == null
           ? faceProvider.error
           : hasAccess
           ? 'Face verified for ${scanArea?.name ?? 'Campus Gate'}'
-          : 'RBAC denied: ${user.role} cannot access ${scanArea?.name ?? 'this area'}';
+          : timingDenied
+          ? 'Access denied outside the active access window'
+          : 'Access permission is not assigned for ${scanArea?.name ?? 'this area'}';
       final log = faceProvider.buildLog(
         user: user,
         area: scanArea,
@@ -144,7 +145,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       if (!hasAccess && system.intrusionAlerts && mounted) {
         await alertProvider.raiseIntrusionAlert(
           title: 'Access Denied',
-          body: reason ?? 'A FAZEKEY access attempt was denied.',
+          body: reason ?? 'An access attempt was denied.',
           severity: user == null ? 'High' : 'Medium',
         );
         if (!mounted) return;
@@ -152,11 +153,11 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           const SnackBar(content: Text('Intrusion alert: access denied.')),
         );
       }
+      await _releaseCameraForDashboardHandoff();
       if (!mounted) return;
-      Navigator.pushReplacementNamed(
-        context,
-        AccessResultScreen.route,
-        arguments: {'user': hasAccess ? user : null, 'log': log},
+      _replaceWithAccessResult(
+        user: hasAccess ? user : null,
+        log: log,
       );
     } catch (e) {
       if (mounted) {
@@ -165,6 +166,12 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           _busy = false;
         });
         await _initCamera();
+      }
+    } finally {
+      _recognitionInFlight = false;
+      if (_disposeRequestedDuringRecognition) {
+        await _disposeCamera();
+        unawaited(_faceProvider?.closeDetector());
       }
     }
   }
@@ -202,11 +209,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       ).showSnackBar(SnackBar(content: Text(snackBarText)));
     }
     if (!mounted) return;
-    Navigator.pushReplacementNamed(
-      context,
-      AccessResultScreen.route,
-      arguments: {'user': null, 'log': log},
-    );
+    await _releaseCameraForDashboardHandoff();
+    if (!mounted) return;
+    _replaceWithAccessResult(user: null, log: log);
   }
 
   Area? _scanArea(List<Area> areas) {
@@ -229,8 +234,34 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     await controller?.dispose();
   }
 
+  Future<void> _releaseCameraForDashboardHandoff() async {
+    if (_cameraReleaseStarted) return;
+    _cameraReleaseStarted = true;
+    await _disposeCamera();
+    await SchedulerBinding.instance.endOfFrame;
+  }
+
+  void _replaceWithAccessResult({
+    required Object? user,
+    required Object? log,
+  }) {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(
+        context,
+        AccessResultScreen.route,
+        arguments: {'user': user, 'log': log},
+      );
+    });
+  }
+
   @override
   void dispose() {
+    if (_recognitionInFlight) {
+      _disposeRequestedDuringRecognition = true;
+      super.dispose();
+      return;
+    }
     final controller = _controller;
     _controller = null;
     unawaited(controller?.dispose());
@@ -245,13 +276,12 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       backgroundColor: Colors.black,
       body: SafeArea(
         child: StreamBuilder<SystemSettings>(
-          stream: _firebase.watchSystemSettings(),
-          initialData: SystemSettings.defaults(),
-          builder: (context, snapshot) {
-            final settings = snapshot.data ?? SystemSettings.defaults();
-            final lockedOut =
-                settings.globalLockdown ||
-                settings.shouldDenyScanAt(DateTime.now());
+            stream: _firebase.watchSystemSettings(),
+            initialData: SystemSettings.defaults(),
+            builder: (context, snapshot) {
+              final settings = snapshot.data ?? SystemSettings.defaults();
+              final lockedOut = settings.globalLockdown;
+              final timingLocked = settings.shouldDenyScanAt(DateTime.now());
             return Stack(
               children: [
                 Positioned.fill(
@@ -306,7 +336,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
                       const SizedBox(width: 12),
                       const Expanded(
                         child: Text(
-                          'Face Login',
+                          'Face Access',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 20,
@@ -323,6 +353,26 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
                   bottom: 24,
                   child: Column(
                     children: [
+                      if (!lockedOut && timingLocked) ...[
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: .56),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                            child: Text(
+                              'Access window is closed. Admin verification remains available.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       if (_error != null || face.error != null)
                         Text(
                           _error ?? face.error!,

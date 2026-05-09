@@ -29,7 +29,7 @@ class SystemSettings {
     afterHoursStart: 8,
     afterHoursEnd: 10,
     updatedAt: DateTime.now(),
-    administratorEmail: 'administrator@fazekey.app',
+    administratorEmail: 'administrator@campus-access.local',
   );
 
   factory SystemSettings.fromMap(Map<String, dynamic>? map) {
@@ -47,7 +47,7 @@ class SystemSettings {
           map['administratorEmail'] ??
           map['adminEmail'] ??
           map['supportEmail'] ??
-          'administrator@fazekey.app',
+          'administrator@campus-access.local',
     );
   }
 
@@ -81,6 +81,11 @@ class SystemSettings {
       startHour: afterHoursStart,
       endHour: afterHoursEnd,
     );
+  }
+
+  bool shouldDenyScanForRole(String? role, DateTime now) {
+    if (role?.trim().toLowerCase() == 'admin') return false;
+    return shouldDenyScanAt(now);
   }
 
   static bool isAccessAllowedAt(

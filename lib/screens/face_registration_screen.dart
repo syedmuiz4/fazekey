@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
+import '../models/app_user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/face_provider.dart';
 import '../widgets/face_overlay.dart';
@@ -16,6 +18,12 @@ class FaceRegistrationScreen extends StatefulWidget {
 
   @override
   State<FaceRegistrationScreen> createState() => _FaceRegistrationScreenState();
+}
+
+class FaceRegistrationArgs {
+  const FaceRegistrationArgs({required this.user});
+
+  final AppUser user;
 }
 
 class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
@@ -120,7 +128,31 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   @override
   Widget build(BuildContext context) {
     final face = context.watch<FaceProvider>();
-    final user = context.watch<AuthProvider>().user;
+    final auth = context.watch<AuthProvider>();
+    final args = ModalRoute.of(context)?.settings.arguments;
+    final selectedUser = args is FaceRegistrationArgs ? args.user : null;
+    if (selectedUser != null && auth.loading && auth.user == null) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    if (selectedUser != null && !auth.isAdmin) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Center(
+            child: Text(
+              'Management access is unavailable.',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ),
+      );
+    }
+    final user = selectedUser ?? auth.user;
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -145,7 +177,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Register face ${_captures.length}/3',
+                      'Face Enrollment ${_captures.length}/3',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 20,
@@ -172,7 +204,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   PrimaryButton(
                     label: _captures.length < 3
                         ? 'Capture Sample'
-                        : 'Save Face Profile',
+                        : 'Save Biometric Profile',
                     loading: _busy || face.loading,
                     icon: _captures.length < 3
                         ? Icons.camera_alt_rounded
@@ -185,7 +217,6 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       if (user == null) return;
                       final faceProvider = context.read<FaceProvider>();
                       final authProvider = context.read<AuthProvider>();
-                      final navigator = Navigator.of(context);
                       final modelReady =
                           _modelReady || await faceProvider.ensureModelReady();
                       if (!modelReady) {
@@ -201,7 +232,17 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       );
                       await authProvider.refreshProfile();
                       if (ok && mounted) {
-                        navigator.pushReplacementNamed(DashboardScreen.route);
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          final navigator = Navigator.of(context);
+                          if (selectedUser == null) {
+                            navigator.pushReplacementNamed(
+                              DashboardScreen.route,
+                            );
+                          } else {
+                            navigator.pop(true);
+                          }
+                        });
                       }
                       if (!ok && mounted) {
                         setState(() => _busy = false);

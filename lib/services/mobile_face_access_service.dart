@@ -52,9 +52,18 @@ class MobileFaceAccessService {
       );
 
   Future<Rect> getFaceBoundingBox(String imagePath) async {
-    final faces = await _runDetectorTask(() {
+    final faces = await _runDetectorTask(() async {
       final inputImage = InputImage.fromFilePath(imagePath);
-      return _activeFaceDetector.processImage(inputImage);
+      try {
+        return await _activeFaceDetector.processImage(inputImage);
+      } on Object catch (e) {
+        if (_isRecoverableMlKitLandmarkError(e)) {
+          throw Exception(
+            'Face detection could not read landmarks for this frame. Please scan again with your face centered.',
+          );
+        }
+        rethrow;
+      }
     });
 
     if (faces.isEmpty) {
@@ -106,6 +115,12 @@ class MobileFaceAccessService {
       }
     }
     _lastDetectorStartedAt = DateTime.now();
+  }
+
+  bool _isRecoverableMlKitLandmarkError(Object error) {
+    final details = error.toString().toLowerCase();
+    return details.contains('thickfacedetector') &&
+        (details.contains('unknown') || details.contains('landmark'));
   }
 
   Future<List<RegisteredFaceMatch>> loadRegisteredFaceDistances(

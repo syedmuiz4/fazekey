@@ -16,7 +16,7 @@ class PushNotificationService {
       AndroidNotificationChannel(
         'intrusion_alerts',
         'Intrusion Alerts',
-        description: 'High-priority FAZEKEY intrusion and lockdown alerts.',
+        description: 'High-priority intrusion and lockdown alerts.',
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
@@ -66,7 +66,7 @@ class PushNotificationService {
           'intrusion_alerts',
           'Intrusion Alerts',
           channelDescription:
-              'High-priority FAZEKEY intrusion and lockdown alerts.',
+              'High-priority intrusion and lockdown alerts.',
           importance: Importance.max,
           priority: Priority.high,
           category: AndroidNotificationCategory.alarm,
@@ -123,7 +123,7 @@ class PushNotificationService {
     final title =
         notification?.title ??
         message.data['title']?.toString() ??
-        'FAZEKEY Alert';
+        'Security Alert';
     final body =
         notification?.body ??
         message.data['body']?.toString() ??

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../models/access_log.dart';
 import '../models/app_user.dart';
@@ -77,16 +78,14 @@ class AccessResultScreen extends StatelessWidget {
                 PrimaryButton(
                   label: 'Back to Dashboard',
                   icon: Icons.dashboard_rounded,
-                  onPressed: () => Navigator.pushReplacementNamed(
+                  onPressed: () => _replaceAfterFrame(
                     context,
                     DashboardScreen.route,
                   ),
                 ),
                 TextButton(
-                  onPressed: () => Navigator.pushReplacementNamed(
-                    context,
-                    FaceLoginScreen.route,
-                  ),
+                  onPressed: () =>
+                      _replaceAfterFrame(context, FaceLoginScreen.route),
                   child: const Text('Scan another face'),
                 ),
               ],
@@ -95,5 +94,12 @@ class AccessResultScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  void _replaceAfterFrame(BuildContext context, String route) {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      Navigator.pushReplacementNamed(context, route);
+    });
   }
 }

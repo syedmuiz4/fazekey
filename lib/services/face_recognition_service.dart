@@ -118,7 +118,7 @@ class FaceRecognitionService {
     }
     if (bytes.lengthInBytes < 8) {
       throw FaceRecognitionException(
-        'The model asset at $assetPath is too small to be a valid TFLite model.',
+        'The model asset at $assetPath is too small to be valid.',
       );
     }
 
@@ -129,7 +129,7 @@ class FaceRecognitionService {
         bytes[7] == 0x33;
     if (!hasTfliteIdentifier) {
       throw FaceRecognitionException(
-        'The model asset at $assetPath is not a valid TensorFlow Lite flatbuffer. Replace it with the real .tflite binary.',
+        'The model asset at $assetPath is not a valid face model binary.',
       );
     }
   }
@@ -167,8 +167,21 @@ class FaceRecognitionService {
         throw const FaceRecognitionException(
           'Face detection timed out. Try brighter lighting and keep your face centered.',
         );
+      } on Object catch (e) {
+        if (_isRecoverableMlKitLandmarkError(e)) {
+          throw const FaceRecognitionException(
+            'Face detection could not read landmarks for this frame. Please scan again with your face centered.',
+          );
+        }
+        rethrow;
       }
     });
+  }
+
+  bool _isRecoverableMlKitLandmarkError(Object error) {
+    final details = error.toString().toLowerCase();
+    return details.contains('thickfacedetector') &&
+        (details.contains('unknown') || details.contains('landmark'));
   }
 
   Future<T> _runDetectorTask<T>(Future<T> Function() task) {

@@ -20,6 +20,7 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
+  final _identityNumber = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _phone = TextEditingController();
@@ -38,6 +39,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   void dispose() {
     _name.dispose();
+    _identityNumber.dispose();
     _email.dispose();
     _password.dispose();
     _phone.dispose();
@@ -73,6 +75,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       TextFormField(
                         controller: _name,
                         decoration: const InputDecoration(labelText: 'Name'),
+                        validator: _required,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _identityNumber,
+                        decoration: const InputDecoration(
+                          labelText: 'Matric or Staff ID',
+                        ),
                         validator: _required,
                       ),
                       const SizedBox(height: 12),
@@ -204,6 +214,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 department: selectedDepartment ?? '',
                                 phone: _phone.text,
                                 room: selectedArea,
+                                identityNumber: _identityNumber.text,
                               );
                           if (ok && context.mounted) {
                             Navigator.pushReplacementNamed(

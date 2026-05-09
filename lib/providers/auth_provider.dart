@@ -19,6 +19,10 @@ class AuthProvider extends ChangeNotifier {
 
   bool get isAuthenticated => user != null;
 
+  bool get isAdmin => user?.isAdmin == true;
+
+  bool get isUser => isAuthenticated && !isAdmin;
+
   bool get hasSignedInAccount => _firebase.currentUserId != null;
 
   String? get passwordResetEmail {
@@ -69,6 +73,7 @@ class AuthProvider extends ChangeNotifier {
     required String department,
     required String phone,
     required String room,
+    String identityNumber = '',
   }) async {
     return _guard(() async {
       user = await _firebase.register(
@@ -78,6 +83,7 @@ class AuthProvider extends ChangeNotifier {
         department: department,
         phone: phone,
         room: room,
+        identityNumber: identityNumber,
       );
     });
   }
@@ -108,6 +114,28 @@ class AuthProvider extends ChangeNotifier {
     return _guard(() async {
       user = await _firebase.currentUserProfile();
     });
+  }
+
+  void completeFaceLogin(AppUser verifiedUser) {
+    user = verifiedUser;
+    loading = false;
+    error = null;
+    notifyListeners();
+  }
+
+  void syncProfileSnapshot(AppUser? latest) {
+    if (_sameProfile(user, latest)) return;
+    user = latest;
+    loading = false;
+    error = null;
+    notifyListeners();
+  }
+
+  Stream<AppUser?> watchActiveUserProfile() {
+    final activeUser = user;
+    if (activeUser != null) return _firebase.watchUser(activeUser.id);
+    if (hasSignedInAccount) return _firebase.watchCurrentUserProfile();
+    return Stream<AppUser?>.value(null);
   }
 
   Stream<AppUser?> watchCurrentUserProfile() {
@@ -163,6 +191,24 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+  }
+
+  bool _sameProfile(AppUser? left, AppUser? right) {
+    if (left == null || right == null) return left == right;
+    return left.id == right.id &&
+        left.name == right.name &&
+        left.email == right.email &&
+        left.department == right.department &&
+        left.phone == right.phone &&
+        left.room == right.room &&
+        left.role == right.role &&
+        left.identityNumber == right.identityNumber &&
+        left.course == right.course &&
+        left.faculty == right.faculty &&
+        left.currentSemester == right.currentSemester &&
+        left.accessLevel == right.accessLevel &&
+        left.hasFace == right.hasFace &&
+        left.photoUrl == right.photoUrl;
   }
 
   @override

@@ -69,7 +69,7 @@ class FaceKeyApp extends StatelessWidget {
       child: Consumer<AuthProvider>(
         builder: (context, auth, _) {
           return MaterialApp(
-            title: 'FaceKey',
+            title: 'Campus Access',
             debugShowCheckedModeBanner: false,
             themeMode: auth.darkMode ? ThemeMode.dark : ThemeMode.light,
             theme: _theme(Brightness.light),
