@@ -67,8 +67,18 @@ class SystemProvider extends ChangeNotifier {
   Future<void> toggleMonitoringWindowLogging(bool value) =>
       save(settings.copyWith(monitoringWindowLogging: value));
 
+  Future<void> toggleMaintenanceMode(bool value) =>
+      save(settings.copyWith(maintenanceMode: value));
+
   Future<void> updateAfterHours({required int start, required int end}) {
     return save(settings.copyWith(afterHoursStart: start, afterHoursEnd: end));
+  }
+
+  Future<void> updateAcademicSession({
+    required DateTime start,
+    required DateTime end,
+  }) {
+    return save(settings.copyWith(semesterStart: start, semesterEnd: end));
   }
 
   @override

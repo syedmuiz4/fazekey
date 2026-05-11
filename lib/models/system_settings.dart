@@ -6,8 +6,11 @@ class SystemSettings {
     required this.afterHoursAlerts,
     required this.intrusionAlerts,
     required this.monitoringWindowLogging,
+    required this.maintenanceMode,
     required this.afterHoursStart,
     required this.afterHoursEnd,
+    required this.semesterStart,
+    required this.semesterEnd,
     required this.updatedAt,
     required this.administratorEmail,
   });
@@ -16,8 +19,11 @@ class SystemSettings {
   final bool afterHoursAlerts;
   final bool intrusionAlerts;
   final bool monitoringWindowLogging;
+  final bool maintenanceMode;
   final int afterHoursStart;
   final int afterHoursEnd;
+  final DateTime semesterStart;
+  final DateTime semesterEnd;
   final DateTime updatedAt;
   final String administratorEmail;
 
@@ -26,8 +32,11 @@ class SystemSettings {
     afterHoursAlerts: false,
     intrusionAlerts: true,
     monitoringWindowLogging: true,
+    maintenanceMode: false,
     afterHoursStart: 8,
     afterHoursEnd: 10,
+    semesterStart: DateTime(2026, 3, 1),
+    semesterEnd: DateTime(2026, 7, 31),
     updatedAt: DateTime.now(),
     administratorEmail: 'administrator@campus-access.local',
   );
@@ -40,8 +49,15 @@ class SystemSettings {
           map['afterHoursEnabled'] ?? map['afterHoursAlerts'] ?? false,
       intrusionAlerts: map['intrusionAlerts'] ?? true,
       monitoringWindowLogging: map['monitoringWindowLogging'] ?? true,
+      maintenanceMode: map['maintenanceMode'] ?? false,
       afterHoursStart: map['accessWindowStart'] ?? map['afterHoursStart'] ?? 8,
       afterHoursEnd: map['accessWindowEnd'] ?? map['afterHoursEnd'] ?? 10,
+      semesterStart:
+          (map['semesterStart'] as Timestamp?)?.toDate() ??
+          SystemSettings.defaults().semesterStart,
+      semesterEnd:
+          (map['semesterEnd'] as Timestamp?)?.toDate() ??
+          SystemSettings.defaults().semesterEnd,
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       administratorEmail:
           map['administratorEmail'] ??
@@ -58,8 +74,11 @@ class SystemSettings {
     'afterHoursAlerts': afterHoursAlerts,
     'intrusionAlerts': intrusionAlerts,
     'monitoringWindowLogging': monitoringWindowLogging,
+    'maintenanceMode': maintenanceMode,
     'accessWindowStart': afterHoursStart,
     'accessWindowEnd': afterHoursEnd,
+    'semesterStart': Timestamp.fromDate(semesterStart),
+    'semesterEnd': Timestamp.fromDate(semesterEnd),
     'administratorEmail': administratorEmail,
     'updatedAt': Timestamp.fromDate(updatedAt),
   };
@@ -108,8 +127,11 @@ class SystemSettings {
     bool? afterHoursAlerts,
     bool? intrusionAlerts,
     bool? monitoringWindowLogging,
+    bool? maintenanceMode,
     int? afterHoursStart,
     int? afterHoursEnd,
+    DateTime? semesterStart,
+    DateTime? semesterEnd,
     String? administratorEmail,
   }) => SystemSettings(
     globalLockdown: globalLockdown ?? this.globalLockdown,
@@ -117,8 +139,11 @@ class SystemSettings {
     intrusionAlerts: intrusionAlerts ?? this.intrusionAlerts,
     monitoringWindowLogging:
         monitoringWindowLogging ?? this.monitoringWindowLogging,
+    maintenanceMode: maintenanceMode ?? this.maintenanceMode,
     afterHoursStart: afterHoursStart ?? this.afterHoursStart,
     afterHoursEnd: afterHoursEnd ?? this.afterHoursEnd,
+    semesterStart: semesterStart ?? this.semesterStart,
+    semesterEnd: semesterEnd ?? this.semesterEnd,
     updatedAt: DateTime.now(),
     administratorEmail: administratorEmail ?? this.administratorEmail,
   );

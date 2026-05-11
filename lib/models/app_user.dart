@@ -18,6 +18,8 @@ class AppUser {
     this.faculty = '',
     this.currentSemester = '',
     this.accessLevel = 1,
+    this.homeAddress = '',
+    this.emergencyContact = '',
     this.photoUrl,
   });
 
@@ -35,6 +37,8 @@ class AppUser {
   final String faculty;
   final String currentSemester;
   final int accessLevel;
+  final String homeAddress;
+  final String emergencyContact;
   final String? photoUrl;
 
   bool get isAdmin => role.trim().toLowerCase() == 'admin';
@@ -53,9 +57,7 @@ class AppUser {
     final roleAllowed =
         area.allowedRoles.isEmpty ||
         area.allowedRoles.any((r) => r.trim().toLowerCase() == normalizedRole);
-    final floorMatch = RegExp(
-      r'(\d+)',
-    ).firstMatch(area.floor);
+    final floorMatch = RegExp(r'(\d+)').firstMatch(area.floor);
     final floorLevel = int.tryParse(floorMatch?.group(1) ?? '');
     final levelAllowed = floorLevel == null || floorLevel <= accessLevel;
     return departmentAllowed && roleAllowed && levelAllowed;
@@ -78,6 +80,8 @@ class AppUser {
       currentSemester: (map['currentSemester'] ?? map['semester'] ?? '')
           .toString(),
       accessLevel: (map['accessLevel'] as num?)?.toInt() ?? 1,
+      homeAddress: (map['homeAddress'] ?? map['address'] ?? '').toString(),
+      emergencyContact: (map['emergencyContact'] ?? '').toString(),
       photoUrl: map['photoUrl'],
     );
   }
@@ -94,6 +98,8 @@ class AppUser {
     'faculty': faculty,
     'currentSemester': currentSemester,
     'accessLevel': accessLevel,
+    'homeAddress': homeAddress,
+    'emergencyContact': emergencyContact,
     'createdAt': Timestamp.fromDate(createdAt),
     'hasFace': hasFace,
     'photoUrl': photoUrl,
@@ -111,6 +117,8 @@ class AppUser {
     String? faculty,
     String? currentSemester,
     int? accessLevel,
+    String? homeAddress,
+    String? emergencyContact,
     bool? hasFace,
     String? photoUrl,
   }) => AppUser(
@@ -128,6 +136,8 @@ class AppUser {
     faculty: faculty ?? this.faculty,
     currentSemester: currentSemester ?? this.currentSemester,
     accessLevel: accessLevel ?? this.accessLevel,
+    homeAddress: homeAddress ?? this.homeAddress,
+    emergencyContact: emergencyContact ?? this.emergencyContact,
     photoUrl: photoUrl ?? this.photoUrl,
   );
 }

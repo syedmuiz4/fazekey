@@ -43,18 +43,20 @@ class AuthProvider extends ChangeNotifier {
       if (firebaseUser == null) return;
       loading = true;
       notifyListeners();
-      _profileSub = _firebase.watchUser(firebaseUser.uid).listen(
-        (profile) {
-          user = profile;
-          loading = false;
-          notifyListeners();
-        },
-        onError: (e) {
-          error = e.toString();
-          loading = false;
-          notifyListeners();
-        },
-      );
+      _profileSub = _firebase
+          .watchUser(firebaseUser.uid)
+          .listen(
+            (profile) {
+              user = profile;
+              loading = false;
+              notifyListeners();
+            },
+            onError: (e) {
+              error = e.toString();
+              loading = false;
+              notifyListeners();
+            },
+          );
     });
     await _localDb.database;
   }
@@ -147,6 +149,9 @@ class AuthProvider extends ChangeNotifier {
     required String department,
     required String phone,
     required String room,
+    String homeAddress = '',
+    String emergencyContact = '',
+    String? photoUrl,
   }) async {
     final current = user;
     if (current == null) {
@@ -160,6 +165,9 @@ class AuthProvider extends ChangeNotifier {
         department: department.trim(),
         phone: phone.trim(),
         room: room.trim(),
+        homeAddress: homeAddress.trim(),
+        emergencyContact: emergencyContact.trim(),
+        photoUrl: photoUrl,
       );
       await _firebase.updateUserProfile(next);
       user = next;
@@ -207,6 +215,8 @@ class AuthProvider extends ChangeNotifier {
         left.faculty == right.faculty &&
         left.currentSemester == right.currentSemester &&
         left.accessLevel == right.accessLevel &&
+        left.homeAddress == right.homeAddress &&
+        left.emergencyContact == right.emergencyContact &&
         left.hasFace == right.hasFace &&
         left.photoUrl == right.photoUrl;
   }

@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import '../models/access_log.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
+import '../models/incident_report.dart';
 import '../models/system_settings.dart';
 
 class FirebaseService {
@@ -70,9 +71,7 @@ class FirebaseService {
     } on FirebaseAuthException catch (e) {
       if (e.code == 'configuration-not-found' ||
           e.message?.contains('CONFIGURATION_NOT_FOUND') == true) {
-        throw Exception(
-          'Account recovery is not configured for this app.',
-        );
+        throw Exception('Account recovery is not configured for this app.');
       }
       throw Exception(e.message ?? 'Authentication failed: ${e.code}');
     }
@@ -107,8 +106,9 @@ class FirebaseService {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .map(
-          (snap) =>
-              snap.docs.map((doc) => AppUser.fromMap(doc.id, doc.data())).toList(),
+          (snap) => snap.docs
+              .map((doc) => AppUser.fromMap(doc.id, doc.data()))
+              .toList(),
         );
   }
 
@@ -144,6 +144,8 @@ class FirebaseService {
       'faculty': user.faculty.trim(),
       'currentSemester': user.currentSemester.trim(),
       'accessLevel': user.accessLevel.clamp(1, 3),
+      'homeAddress': user.homeAddress.trim(),
+      'emergencyContact': user.emergencyContact.trim(),
       'createdAt': Timestamp.fromDate(user.createdAt),
       'hasFace': user.hasFace,
       if (user.photoUrl?.trim().isNotEmpty == true) 'photoUrl': user.photoUrl,
@@ -160,6 +162,8 @@ class FirebaseService {
     required String room,
     required String role,
     required int accessLevel,
+    String course = '',
+    String faculty = 'FSKTM',
   }) async {
     final ref = firestore.collection('users').doc();
     final user = AppUser(
@@ -171,8 +175,8 @@ class FirebaseService {
       room: room.trim(),
       role: role.trim().isEmpty ? 'user' : role.trim(),
       identityNumber: identityNumber.trim(),
-      course: department.trim(),
-      faculty: 'FSKTM',
+      course: course.trim().isEmpty ? department.trim() : course.trim(),
+      faculty: faculty.trim().isEmpty ? 'FSKTM' : faculty.trim(),
       currentSemester: 'Semester 1',
       accessLevel: accessLevel.clamp(1, 3),
       createdAt: DateTime.now(),
@@ -290,18 +294,37 @@ class FirebaseService {
     required String severity,
     required String areaName,
     required String details,
+    String reporterIdentityNumber = '',
+    String lastScannedLocation = '',
   }) async {
     final report = {
       'reporterId': reporterId,
       'reporterName': reporterName.trim(),
+      'reporterIdentityNumber': reporterIdentityNumber.trim(),
       'title': title.trim(),
       'severity': severity.trim(),
       'areaName': areaName.trim(),
+      'lastScannedLocation': lastScannedLocation.trim().isEmpty
+          ? areaName.trim()
+          : lastScannedLocation.trim(),
       'details': details.trim(),
       'status': 'open',
       'createdAt': FieldValue.serverTimestamp(),
     };
     await firestore.collection('incidentReports').add(report);
+  }
+
+  Stream<List<IncidentReport>> watchIncidentReports({int limit = 40}) {
+    return firestore
+        .collection('incidentReports')
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map(
+          (snap) => snap.docs
+              .map((doc) => IncidentReport.fromMap(doc.id, doc.data()))
+              .toList(),
+        );
   }
 
   Future<void> syncEncodedLog(Map<String, dynamic> row) async {

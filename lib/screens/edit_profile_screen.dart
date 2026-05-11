@@ -1,18 +1,17 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
-import '../models/area.dart';
 import '../models/app_user.dart';
-import '../providers/area_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 import 'face_registration_screen.dart';
-
-const _levels = [1, 2, 3];
 
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
@@ -26,40 +25,53 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _firebase = FirebaseService();
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
-  final _department = TextEditingController();
+  final _matricNo = TextEditingController();
+  final _course = TextEditingController();
+  final _faculty = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
-  int _level = 1;
-  String? _area;
+  final _homeAddress = TextEditingController();
+  final _emergencyContact = TextEditingController();
   String? _loadedProfileKey;
-  Stream<AppUser?>? _profileStream;
   AppUser? _initialProfile;
   AppUser? _currentProfile;
+  String? _photoPath;
   bool _loadingInitialProfile = true;
   bool _updatingProfile = false;
+  bool _pickingPhoto = false;
   String? _profileError;
 
   @override
   void initState() {
     super.initState();
     _loadInitialProfile();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      context.read<AreaProvider>().listen();
-    });
   }
 
   @override
   void dispose() {
     _name.dispose();
-    _department.dispose();
+    _matricNo.dispose();
+    _course.dispose();
+    _faculty.dispose();
     _email.dispose();
     _phone.dispose();
+    _homeAddress.dispose();
+    _emergencyContact.dispose();
     super.dispose();
   }
 
   Future<void> _loadInitialProfile() async {
     try {
+      final activeProfile = context.read<AuthProvider>().user;
+      if (activeProfile != null) {
+        _loadUser(activeProfile);
+        if (!mounted) return;
+        setState(() {
+          _initialProfile = activeProfile;
+          _loadingInitialProfile = false;
+        });
+        return;
+      }
       final profile = await _firebase.currentUserProfile();
       if (!mounted) return;
       if (profile != null) {
@@ -83,9 +95,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final areas = context.watch<AreaProvider>().areas;
-    final profileStream =
-        _profileStream ??= _firebase.watchCurrentUserProfile();
 
     return AppBackground(
       child: Scaffold(
@@ -95,7 +104,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           backgroundColor: Colors.transparent,
         ),
         body: StreamBuilder<AppUser?>(
-          stream: profileStream,
+          stream: auth.watchActiveUserProfile(),
           initialData: auth.user ?? _initialProfile,
           builder: (context, snapshot) {
             final user = snapshot.data;
@@ -108,28 +117,22 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               return const Center(child: Text('Sign in to edit your profile.'));
             }
             _loadUser(user);
-            final areaOptions = _restrictedAreasForLevel(areas, _level);
-            final selectedArea = _selectedOption(areaOptions, _area);
-            _syncAreaSelection(selectedArea);
             return _ProfileForm(
               form: _form,
               user: user,
               name: _name,
-              department: _department,
+              matricNo: _matricNo,
+              course: _course,
+              faculty: _faculty,
               email: _email,
               phone: _phone,
-              level: _level,
-              areaOptions: areaOptions,
-              selectedArea: selectedArea,
-              onLevelChanged: (level) => setState(() {
-                _level = level;
-                _area = _firstRestrictedAreaForLevel(areas, level);
-              }),
-              onAreaChanged: (value) => setState(() {
-                _area = value;
-              }),
+              homeAddress: _homeAddress,
+              emergencyContact: _emergencyContact,
+              photoPath: _photoPath,
+              onPickPhoto: _showImageSourceSheet,
               onUpdateProfile: _updateProfile,
               updatingProfile: _updatingProfile,
+              pickingPhoto: _pickingPhoto,
               profileError: _profileError,
             );
           },
@@ -140,44 +143,95 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   void _loadUser(AppUser user) {
     final profileKey =
-        '${user.id}|${user.name}|${user.phone}|${user.department}|${user.room}';
+        '${user.id}|${user.name}|${user.email}|${user.identityNumber}|'
+        '${user.course}|${user.faculty}|${user.phone}|${user.homeAddress}|'
+        '${user.emergencyContact}|${user.photoUrl}';
     if (_loadedProfileKey == profileKey) return;
     _loadedProfileKey = profileKey;
     _currentProfile = user;
     _name.text = user.name;
-    _department.text = user.department;
-    _email.text = _firebase.currentUserEmail ?? user.email;
+    _matricNo.text = user.identityNumber.trim().isEmpty
+        ? user.id
+        : user.identityNumber.trim();
+    _course.text = user.course.trim().isEmpty ? user.department : user.course;
+    _faculty.text = user.faculty.trim().isEmpty ? 'FSKTM' : user.faculty;
+    final accountEmail = _firebase.currentUserEmail;
+    _email.text = accountEmail?.trim().isNotEmpty == true
+        ? accountEmail!.trim()
+        : user.email;
     _phone.text = user.phone;
-    _area = user.room;
-    _level = _levelFromRoom(user.room) ?? 1;
+    _homeAddress.text = user.homeAddress;
+    _emergencyContact.text = user.emergencyContact;
+    _photoPath = user.photoUrl;
   }
 
-  int? _levelFromRoom(String room) {
-    final match = RegExp(
-      r'Level\s+(\d+)',
-      caseSensitive: false,
-    ).firstMatch(room);
-    return int.tryParse(match?.group(1) ?? '');
+  Future<void> _showImageSourceSheet() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    await _pickProfileImage(source);
   }
 
-  void _syncAreaSelection(String? area) {
-    if (_area == area) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _area == area) return;
-      setState(() => _area = area);
+  Future<void> _pickProfileImage(ImageSource source) async {
+    final current = _currentProfile;
+    if (current == null) return;
+    setState(() {
+      _pickingPhoto = true;
+      _profileError = null;
     });
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 86,
+        maxWidth: 1200,
+      );
+      if (picked == null) return;
+      final saved = await _persistProfileImage(picked, current);
+      if (!mounted) return;
+      setState(() => _photoPath = saved.path);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _profileError = 'Unable to update profile picture: $e');
+    } finally {
+      if (mounted) setState(() => _pickingPhoto = false);
+    }
+  }
+
+  Future<File> _persistProfileImage(XFile picked, AppUser user) async {
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(docs.path, 'profile_pictures'));
+    await dir.create(recursive: true);
+    final extension = p.extension(picked.path).trim().isEmpty
+        ? '.jpg'
+        : p.extension(picked.path);
+    final fileName =
+        '${user.id}-${DateTime.now().millisecondsSinceEpoch}$extension';
+    return File(picked.path).copy(p.join(dir.path, fileName));
   }
 
   Future<void> _updateProfile() async {
     if (!_form.currentState!.validate()) return;
     final current = _currentProfile;
-    final selectedDepartment = _department.text.trim();
-    final selectedArea = _area?.trim().isNotEmpty == true
-        ? _area!.trim()
-        : current?.room.trim() ?? '';
-    if (current == null ||
-        _name.text.trim().isEmpty ||
-        selectedDepartment.isEmpty) {
+    if (current == null || _name.text.trim().isEmpty) {
       return;
     }
     final messenger = ScaffoldMessenger.of(context);
@@ -191,9 +245,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       await _firebase.updateUserProfile(
         current.copyWith(
           name: _name.text,
-          department: selectedDepartment,
           phone: _phone.text,
-          room: selectedArea,
+          homeAddress: _homeAddress.text,
+          emergencyContact: _emergencyContact.text,
+          photoUrl: _photoPath,
         ),
       );
       ok = true;
@@ -208,9 +263,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           : failure?.toString() ?? 'Unable to update profile.';
     });
     messenger.showSnackBar(
-      SnackBar(
-        content: Text(ok ? 'Profile updated.' : _profileError!),
-      ),
+      SnackBar(content: Text(ok ? 'Profile updated.' : _profileError!)),
     );
   }
 }
@@ -220,32 +273,36 @@ class _ProfileForm extends StatelessWidget {
     required this.form,
     required this.user,
     required this.name,
-    required this.department,
+    required this.matricNo,
+    required this.course,
+    required this.faculty,
     required this.email,
     required this.phone,
-    required this.level,
-    required this.areaOptions,
-    required this.selectedArea,
-    required this.onLevelChanged,
-    required this.onAreaChanged,
+    required this.homeAddress,
+    required this.emergencyContact,
+    required this.photoPath,
+    required this.onPickPhoto,
     required this.onUpdateProfile,
     required this.updatingProfile,
+    required this.pickingPhoto,
     required this.profileError,
   });
 
   final GlobalKey<FormState> form;
   final AppUser user;
   final TextEditingController name;
-  final TextEditingController department;
+  final TextEditingController matricNo;
+  final TextEditingController course;
+  final TextEditingController faculty;
   final TextEditingController email;
   final TextEditingController phone;
-  final int level;
-  final List<String> areaOptions;
-  final String? selectedArea;
-  final ValueChanged<int> onLevelChanged;
-  final ValueChanged<String?> onAreaChanged;
+  final TextEditingController homeAddress;
+  final TextEditingController emergencyContact;
+  final String? photoPath;
+  final VoidCallback onPickPhoto;
   final VoidCallback? onUpdateProfile;
   final bool updatingProfile;
+  final bool pickingPhoto;
   final String? profileError;
 
   @override
@@ -257,7 +314,11 @@ class _ProfileForm extends StatelessWidget {
           GlassCard(
             child: Row(
               children: [
-                _FaceAvatar(user: user),
+                _EditableFaceAvatar(
+                  photoPath: photoPath,
+                  pickingPhoto: pickingPhoto,
+                  onPickPhoto: onPickPhoto,
+                ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
@@ -265,12 +326,15 @@ class _ProfileForm extends StatelessWidget {
                     children: [
                       Text(
                         user.name,
-                        style: Theme.of(context).textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.w900),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        user.email,
+                        user.email.isEmpty
+                            ? 'Official email pending'
+                            : user.email,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -293,57 +357,71 @@ class _ProfileForm extends StatelessWidget {
                     validator: _required,
                   ),
                   const SizedBox(height: 12),
-                  _LevelDropdown(value: level, onChanged: onLevelChanged),
-                  const SizedBox(height: 12),
                   TextFormField(
-                    controller: department,
-                    decoration: const InputDecoration(labelText: 'Department'),
-                    validator: _required,
+                    controller: matricNo,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Matric No.',
+                      prefixIcon: Icon(Icons.badge_rounded),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: email,
                     readOnly: true,
                     keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(labelText: 'Account Email'),
+                    decoration: const InputDecoration(
+                      labelText: 'Official Email',
+                      prefixIcon: Icon(Icons.alternate_email_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: course,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Course',
+                      prefixIcon: Icon(Icons.school_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: faculty,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Faculty',
+                      prefixIcon: Icon(Icons.account_balance_rounded),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: phone,
                     keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(labelText: 'Phone'),
+                    decoration: const InputDecoration(
+                      labelText: 'Phone Number',
+                      prefixIcon: Icon(Icons.phone_rounded),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  if (selectedArea == null)
-                    Text(
-                      'Area assignment unavailable.',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    )
-                  else
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('edit-area-$level-$selectedArea'),
-                      initialValue: selectedArea,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Restricted Area',
-                      ),
-                      validator: _required,
-                      items: areaOptions
-                          .map(
-                            (area) => DropdownMenuItem(
-                              value: area,
-                              child: Text(
-                                area,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: onAreaChanged,
+                  TextFormField(
+                    controller: homeAddress,
+                    minLines: 2,
+                    maxLines: 4,
+                    textInputAction: TextInputAction.newline,
+                    decoration: const InputDecoration(
+                      labelText: 'Home Address',
+                      prefixIcon: Icon(Icons.home_rounded),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: emergencyContact,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Emergency Contact',
+                      prefixIcon: Icon(Icons.contact_emergency_rounded),
+                    ),
+                  ),
                   const SizedBox(height: 20),
                   FilledButton(
                     onPressed: updatingProfile ? null : onUpdateProfile,
@@ -357,11 +435,10 @@ class _ProfileForm extends StatelessWidget {
                       alignment: Alignment.centerLeft,
                       child: Text(
                         profileError!,
-                        style: Theme.of(context).textTheme.labelLarge
-                            ?.copyWith(
-                              color: Theme.of(context).colorScheme.error,
-                              fontWeight: FontWeight.w800,
-                            ),
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: Theme.of(context).colorScheme.error,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ],
@@ -372,7 +449,9 @@ class _ProfileForm extends StatelessWidget {
                       FaceRegistrationScreen.route,
                     ),
                     child: Text(
-                      user.hasFace ? 'Re-enroll Face Data' : 'Register Face Data',
+                      user.hasFace
+                          ? 'Re-enroll Face Data'
+                          : 'Register Face Data',
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -411,76 +490,46 @@ class _ProfileForm extends StatelessWidget {
       value == null || value.trim().isEmpty ? 'Required' : null;
 }
 
-class _LevelDropdown extends StatelessWidget {
-  const _LevelDropdown({required this.value, required this.onChanged});
+class _EditableFaceAvatar extends StatelessWidget {
+  const _EditableFaceAvatar({
+    required this.photoPath,
+    required this.pickingPhoto,
+    required this.onPickPhoto,
+  });
 
-  final int value;
-  final ValueChanged<int> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return DropdownButtonFormField<int>(
-      initialValue: value,
-      decoration: const InputDecoration(labelText: 'Level'),
-      items: _levels
-          .map(
-            (level) =>
-                DropdownMenuItem(value: level, child: Text('Level $level')),
-          )
-          .toList(),
-      onChanged: (level) {
-        if (level != null) onChanged(level);
-      },
-    );
-  }
-}
-
-class _FaceAvatar extends StatelessWidget {
-  const _FaceAvatar({required this.user});
-
-  final AppUser user;
+  final String? photoPath;
+  final bool pickingPhoto;
+  final VoidCallback onPickPhoto;
 
   @override
   Widget build(BuildContext context) {
-    final photo = user.photoUrl;
-    final file = photo == null ? null : File(photo);
+    final file = photoPath == null ? null : File(photoPath!);
     final image = file != null && file.existsSync() ? FileImage(file) : null;
-    return CircleAvatar(
-      radius: 34,
-      backgroundImage: image,
-      child: image == null ? const Icon(Icons.person_rounded, size: 34) : null,
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        CircleAvatar(
+          radius: 38,
+          backgroundImage: image,
+          child: image == null
+              ? const Icon(Icons.person_rounded, size: 36)
+              : null,
+        ),
+        Positioned(
+          right: -4,
+          bottom: -4,
+          child: IconButton.filledTonal(
+            tooltip: 'Update profile picture',
+            onPressed: pickingPhoto ? null : onPickPhoto,
+            icon: pickingPhoto
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.photo_camera_rounded),
+          ),
+        ),
+      ],
     );
   }
-}
-
-List<String> _restrictedAreasForLevel(List<Area> areas, int level) {
-  final floor = 'Level $level';
-  final names =
-      areas
-          .where(
-            (area) =>
-                area.active &&
-                area.floor.trim().toLowerCase() == floor.toLowerCase(),
-          )
-          .map(
-            (area) => area.name.trim().isEmpty
-                ? '$floor - Room ${area.roomNumber}'
-                : area.name.trim(),
-          )
-          .toSet()
-          .toList()
-        ..sort();
-  return names;
-}
-
-String? _firstRestrictedAreaForLevel(List<Area> areas, int level) {
-  final options = _restrictedAreasForLevel(areas, level);
-  return options.isEmpty ? null : options.first;
-}
-
-String? _selectedOption(List<String> options, String? selected) {
-  if (options.isEmpty) return null;
-  return selected != null && options.contains(selected)
-      ? selected
-      : options.first;
 }
