@@ -26,7 +26,7 @@ class UserDataExportService {
         'phone',
         'home_address',
         'emergency_contact',
-        'restricted_area',
+        'restricted_room',
         'role',
         'access_level',
         'face_registered',

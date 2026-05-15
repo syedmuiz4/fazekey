@@ -78,10 +78,8 @@ class AccessResultScreen extends StatelessWidget {
                 PrimaryButton(
                   label: 'Back to Dashboard',
                   icon: Icons.dashboard_rounded,
-                  onPressed: () => _replaceAfterFrame(
-                    context,
-                    DashboardScreen.route,
-                  ),
+                  onPressed: () =>
+                      _replaceAfterFrame(context, DashboardScreen.route),
                 ),
                 TextButton(
                   onPressed: () =>

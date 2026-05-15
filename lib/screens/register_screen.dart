@@ -149,7 +149,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       const SizedBox(height: 16),
                       if (selectedArea == null)
                         Text(
-                          'No restricted areas configured for Level $_level.',
+                          'No restricted rooms configured for Level $_level.',
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(
                                 color: Theme.of(
@@ -163,7 +163,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           initialValue: selectedArea,
                           isExpanded: true,
                           decoration: const InputDecoration(
-                            labelText: 'Restricted Area',
+                            labelText: 'Restricted Room',
                           ),
                           validator: _required,
                           items: areaOptions
@@ -199,7 +199,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  'Add a restricted area for Level $_level before registering this account.',
+                                  'Add a restricted room for Level $_level before registering this account.',
                                 ),
                               ),
                             );

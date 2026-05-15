@@ -6,6 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
 import '../models/area.dart';
+import '../models/app_user.dart';
 import '../models/system_settings.dart';
 import '../providers/area_provider.dart';
 import '../providers/alert_provider.dart';
@@ -83,7 +84,8 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     final logProvider = context.read<LogProvider>();
     final alertProvider = context.read<AlertProvider>();
     final authProvider = context.read<AuthProvider>();
-    final scanArea = _scanArea(context.read<AreaProvider>().areas);
+    final areas = context.read<AreaProvider>().areas;
+    final scanArea = _scanArea(areas);
 
     try {
       if (system.globalLockdown) {
@@ -114,12 +116,18 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
 
       _recognitionInFlight = true;
       final user = await faceProvider.identify(file);
+      final registeredArea = user == null
+          ? null
+          : _registeredAreaForUser(user, areas);
+      final accessArea = registeredArea ?? scanArea;
       final timingDenied = system.shouldDenyScanForRole(
         user?.role,
         DateTime.now(),
       );
       final areaAllowed =
-          user != null && (scanArea == null || user.canAccessArea(scanArea));
+          user != null &&
+          registeredArea != null &&
+          user.canAccessRegisteredArea(registeredArea);
       final hasAccess = user != null && !timingDenied && areaAllowed;
       if (hasAccess) {
         authProvider.completeFaceLogin(user);
@@ -127,13 +135,15 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       final reason = user == null
           ? faceProvider.error
           : hasAccess
-          ? 'Face verified for ${scanArea?.name ?? 'Campus Gate'}'
+          ? 'Face Identity verified for ${registeredArea.name}'
           : timingDenied
           ? 'Access denied outside the active access window'
-          : 'Access permission is not assigned for ${scanArea?.name ?? 'this area'}';
+          : registeredArea == null
+          ? 'No active room matches ${user.room.isEmpty ? 'this Face Identity profile' : user.room}'
+          : 'RBAC denied: ${user.roleLabel} is not authorized for ${registeredArea.name}';
       final log = faceProvider.buildLog(
         user: user,
-        area: scanArea,
+        area: accessArea,
         status: hasAccess ? 'granted' : 'denied',
         reason: reason,
         snapshotPath: hasAccess ? null : snapshotPath,
@@ -155,10 +165,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       }
       await _releaseCameraForDashboardHandoff();
       if (!mounted) return;
-      _replaceWithAccessResult(
-        user: hasAccess ? user : null,
-        log: log,
-      );
+      _replaceWithAccessResult(user: hasAccess ? user : null, log: log);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -227,6 +234,13 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     return active.first;
   }
 
+  Area? _registeredAreaForUser(AppUser user, List<Area> areas) {
+    for (final area in areas.where((area) => area.active)) {
+      if (user.isRegisteredForArea(area)) return area;
+    }
+    return null;
+  }
+
   Future<void> _disposeCamera() async {
     final controller = _controller;
     _controller = null;
@@ -241,10 +255,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     await SchedulerBinding.instance.endOfFrame;
   }
 
-  void _replaceWithAccessResult({
-    required Object? user,
-    required Object? log,
-  }) {
+  void _replaceWithAccessResult({required Object? user, required Object? log}) {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.pushReplacementNamed(
@@ -276,12 +287,12 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       backgroundColor: Colors.black,
       body: SafeArea(
         child: StreamBuilder<SystemSettings>(
-            stream: _firebase.watchSystemSettings(),
-            initialData: SystemSettings.defaults(),
-            builder: (context, snapshot) {
-              final settings = snapshot.data ?? SystemSettings.defaults();
-              final lockedOut = settings.globalLockdown;
-              final timingLocked = settings.shouldDenyScanAt(DateTime.now());
+          stream: _firebase.watchSystemSettings(),
+          initialData: SystemSettings.defaults(),
+          builder: (context, snapshot) {
+            final settings = snapshot.data ?? SystemSettings.defaults();
+            final lockedOut = settings.globalLockdown;
+            final timingLocked = settings.shouldDenyScanAt(DateTime.now());
             return Stack(
               children: [
                 Positioned.fill(

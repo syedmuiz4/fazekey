@@ -58,9 +58,7 @@ void main() {
   });
 
   test('admin role bypasses operational timing restrictions', () {
-    final settings = SystemSettings.defaults().copyWith(
-      afterHoursAlerts: true,
-    );
+    final settings = SystemSettings.defaults().copyWith(afterHoursAlerts: true);
     final afterHours = DateTime(2026, 5, 5, 13, 12);
 
     expect(settings.shouldDenyScanForRole('user', afterHours), isTrue);
@@ -68,7 +66,7 @@ void main() {
     expect(settings.shouldDenyScanForRole('Admin', afterHours), isFalse);
   });
 
-  test('area ACL explicit grant and revoke override broad policy', () {
+  test('room ACL explicit grant and revoke override broad policy', () {
     final user = AppUser(
       id: 'user-1',
       identityNumber: 'AI220001',
@@ -97,16 +95,69 @@ void main() {
     );
 
     expect(user.canAccessArea(area), isFalse);
-    expect(user.canAccessArea(area.copyWith(allowedUserIds: [user.id])), isTrue);
+    expect(
+      user.canAccessArea(area.copyWith(allowedUserIds: [user.id])),
+      isTrue,
+    );
     expect(
       user.canAccessArea(
-        area.copyWith(
-          allowedUserIds: [user.id],
-          revokedUserIds: [user.id],
-        ),
+        area.copyWith(allowedUserIds: [user.id], revokedUserIds: [user.id]),
       ),
       isFalse,
     );
+  });
+
+  test('room capacity blocks non-privileged users when full', () {
+    final user = AppUser(
+      id: 'user-1',
+      identityNumber: 'AI220001',
+      name: 'Test User',
+      email: 'user@example.edu',
+      department: 'Software Engineering',
+      phone: '',
+      room: 'Level 1 - Access Lab',
+      role: 'user',
+      createdAt: DateTime(2026),
+      hasFace: true,
+      accessLevel: 1,
+    );
+    final admin = user.copyWith(role: 'admin');
+    final fullArea = Area(
+      id: 'lab',
+      name: 'Level 1 - Access Lab',
+      location: 'FSKTM',
+      floor: 'Level 1',
+      roomNumber: '31',
+      active: true,
+      createdAt: DateTime(2026),
+      allowedDepartments: const ['Software Engineering'],
+      allowedRoles: const ['User'],
+      currentOccupancy: 20,
+      capacity: 20,
+    );
+
+    expect(user.canAccessArea(fullArea), isFalse);
+    expect(admin.canAccessArea(fullArea), isTrue);
+  });
+
+  test('only explicit admin role enables admin routing', () {
+    final base = AppUser(
+      id: 'user-1',
+      identityNumber: 'AI220001',
+      name: 'Test User',
+      email: 'user@example.edu',
+      department: 'Software Engineering',
+      phone: '',
+      room: 'Level 1 - Access Lab',
+      role: 'user',
+      createdAt: DateTime(2026),
+      hasFace: true,
+      accessLevel: 1,
+    );
+
+    expect(base.isAdmin, isFalse);
+    expect(base.copyWith(role: 'Admin').isAdmin, isTrue);
+    expect(base.copyWith(role: 'Security').isAdmin, isFalse);
   });
 
   test('app user reads student passport fields from Firestore map', () {

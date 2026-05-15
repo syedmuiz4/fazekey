@@ -64,7 +64,7 @@ class _SplashScreenState extends State<SplashScreen>
                 ),
                 child: Hero(
                   tag: _logoHeroTag,
-                  child: _BiometricLogoScan(controller: _scanController),
+                  child: _FaceIdentityLogoScan(controller: _scanController),
                 ),
               ),
             ),
@@ -87,8 +87,8 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-class _BiometricLogoScan extends StatelessWidget {
-  const _BiometricLogoScan({required this.controller});
+class _FaceIdentityLogoScan extends StatelessWidget {
+  const _FaceIdentityLogoScan({required this.controller});
 
   final Animation<double> controller;
 
@@ -120,7 +120,7 @@ class _BiometricLogoScan extends StatelessWidget {
                   return Column(
                     children: [
                       Text(
-                        'Biometric Scan',
+                        'Face Identity Scan',
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
                           color: const Color(
                             0xFF22D3EE,

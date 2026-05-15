@@ -65,6 +65,10 @@ class Area {
   };
 
   Area copyWith({
+    String? name,
+    String? location,
+    String? floor,
+    String? roomNumber,
     bool? active,
     List<String>? allowedDepartments,
     List<String>? allowedRoles,
@@ -74,10 +78,10 @@ class Area {
     int? capacity,
   }) => Area(
     id: id,
-    name: name,
-    location: location,
-    floor: floor,
-    roomNumber: roomNumber,
+    name: name ?? this.name,
+    location: location ?? this.location,
+    floor: floor ?? this.floor,
+    roomNumber: roomNumber ?? this.roomNumber,
     active: active ?? this.active,
     createdAt: createdAt,
     allowedDepartments: allowedDepartments ?? this.allowedDepartments,

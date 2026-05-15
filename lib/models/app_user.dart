@@ -43,12 +43,26 @@ class AppUser {
 
   bool get isAdmin => role.trim().toLowerCase() == 'admin';
 
+  String get roleLabel {
+    final normalized = role.trim().toLowerCase();
+    if (normalized == 'admin') return 'Admin';
+    if (normalized == 'staff' || normalized == 'security') return 'Staff';
+    return 'Student';
+  }
+
   bool canAccessArea(Area area) {
     if (!area.active) return false;
     if (area.revokedUserIds.contains(id)) return false;
-    if (area.allowedUserIds.contains(id)) return true;
     final normalizedRole = role.trim().toLowerCase();
-    if (normalizedRole == 'admin' || normalizedRole == 'security') return true;
+    final privilegedRole =
+        normalizedRole == 'admin' || normalizedRole == 'security';
+    if (!privilegedRole &&
+        area.capacity > 0 &&
+        area.currentOccupancy >= area.capacity) {
+      return false;
+    }
+    if (area.allowedUserIds.contains(id)) return true;
+    if (privilegedRole) return true;
     final departmentAllowed =
         area.allowedDepartments.isEmpty ||
         area.allowedDepartments.any(
@@ -56,11 +70,33 @@ class AppUser {
         );
     final roleAllowed =
         area.allowedRoles.isEmpty ||
-        area.allowedRoles.any((r) => r.trim().toLowerCase() == normalizedRole);
+        area.allowedRoles.any((r) {
+          final allowed = r.trim().toLowerCase();
+          if (allowed == normalizedRole) return true;
+          return (allowed == 'user' && normalizedRole == 'student') ||
+              (allowed == 'student' && normalizedRole == 'user');
+        });
     final floorMatch = RegExp(r'(\d+)').firstMatch(area.floor);
     final floorLevel = int.tryParse(floorMatch?.group(1) ?? '');
     final levelAllowed = floorLevel == null || floorLevel <= accessLevel;
     return departmentAllowed && roleAllowed && levelAllowed;
+  }
+
+  bool isRegisteredForArea(Area area) {
+    final registeredRoom = room.trim().toLowerCase();
+    if (registeredRoom.isEmpty) return false;
+    final roomLabels = {
+      area.name,
+      area.roomNumber,
+      '${area.floor} - Room ${area.roomNumber}',
+      '${area.location} - ${area.floor} - Room ${area.roomNumber}',
+    }.map((value) => value.trim().toLowerCase());
+    return roomLabels.contains(registeredRoom);
+  }
+
+  bool canAccessRegisteredArea(Area area) {
+    if (!isRegisteredForArea(area)) return false;
+    return canAccessArea(area);
   }
 
   factory AppUser.fromMap(String id, Map<String, dynamic> map) {
@@ -71,7 +107,7 @@ class AppUser {
       department: map['department'] ?? '',
       phone: map['phone'] ?? '',
       room: map['room'] ?? '',
-      role: map['role'] ?? 'user',
+      role: map['role'] ?? 'student',
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       hasFace: map['hasFace'] ?? false,
       identityNumber: map['identityNumber'] ?? map['studentId'] ?? '',

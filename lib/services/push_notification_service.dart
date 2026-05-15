@@ -65,8 +65,7 @@ class PushNotificationService {
         android: AndroidNotificationDetails(
           'intrusion_alerts',
           'Intrusion Alerts',
-          channelDescription:
-              'High-priority intrusion and lockdown alerts.',
+          channelDescription: 'High-priority intrusion and lockdown alerts.',
           importance: Importance.max,
           priority: Priority.high,
           category: AndroidNotificationCategory.alarm,

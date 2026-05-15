@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/access_log.dart';
 import '../models/app_user.dart';
@@ -22,6 +23,13 @@ class FirebaseService {
   String? get currentUserId => auth.currentUser?.uid;
 
   String? get currentUserEmail => auth.currentUser?.email;
+
+  Future<bool> validateAdminSession(String profileId) async {
+    final account = auth.currentUser;
+    if (account == null || account.uid != profileId) return false;
+    final user = await getUser(profileId);
+    return user?.isAdmin == true;
+  }
 
   Future<UserCredential> login(String email, String password) {
     return auth.signInWithEmailAndPassword(
@@ -52,7 +60,7 @@ class FirebaseService {
       department: department.trim(),
       phone: phone.trim(),
       room: room.trim(),
-      role: 'admin',
+      role: 'student',
       identityNumber: identityNumber.trim(),
       course: department.trim(),
       faculty: 'FSKTM',
@@ -90,6 +98,19 @@ class FirebaseService {
     final snap = await userRef(id).get();
     if (!snap.exists || snap.data() == null) return null;
     return AppUser.fromMap(snap.id, snap.data()!);
+  }
+
+  Future<AppUser?> getUserByEmail(String email) async {
+    final target = email.trim();
+    if (target.isEmpty) return null;
+    final snap = await firestore
+        .collection('users')
+        .where('email', isEqualTo: target)
+        .limit(1)
+        .get();
+    if (snap.docs.isEmpty) return null;
+    final doc = snap.docs.first;
+    return AppUser.fromMap(doc.id, doc.data());
   }
 
   Stream<AppUser?> watchUser(String id) {
@@ -173,7 +194,7 @@ class FirebaseService {
       department: department.trim(),
       phone: phone.trim(),
       room: room.trim(),
-      role: role.trim().isEmpty ? 'user' : role.trim(),
+      role: role.trim().isEmpty ? 'student' : role.trim(),
       identityNumber: identityNumber.trim(),
       course: course.trim().isEmpty ? department.trim() : course.trim(),
       faculty: faculty.trim().isEmpty ? 'FSKTM' : faculty.trim(),
@@ -186,9 +207,7 @@ class FirebaseService {
     return user;
   }
 
-  Future<void> deleteManagedUser(String id) async {
-    await userRef(id).delete();
-  }
+  Future<void> deleteManagedUser(String id) async => userRef(id).delete();
 
   Future<void> saveFace(
     String userId,
@@ -209,8 +228,41 @@ class FirebaseService {
     return _authCall(() => auth.sendPasswordResetEmail(email: email.trim()));
   }
 
-  Future<void> sendSetupEmail(String email) {
-    return sendPasswordResetEmail(email);
+  Future<void> sendSetupEmail(String email, {AppUser? user}) async {
+    final target = email.trim();
+    if (target.isEmpty) {
+      throw Exception('A registered email address is required.');
+    }
+    final profile = user ?? await getUserByEmail(target);
+    final displayName = (profile?.name.trim().isNotEmpty == true)
+        ? profile!.name.trim()
+        : 'FAZEKEY user';
+    final roleLabel = profile?.roleLabel ?? 'Student';
+    final room = profile?.room.trim();
+    final roomLine = room == null || room.isEmpty
+        ? 'Your assigned room will appear in your User ID after setup.'
+        : 'Assigned room: $room';
+    final credentialLines = [
+      'Registered email: $target',
+      if (profile?.identityNumber.trim().isNotEmpty == true)
+        'User ID: ${profile!.identityNumber.trim()}',
+      'Role: $roleLabel',
+      roomLine,
+    ].join('\r\n');
+    final body =
+        'Hello $displayName,\r\n\r\n'
+        'Your $roleLabel User ID has been created in FAZEKEY.\r\n\r\n'
+        '$credentialLines\r\n\r\n'
+        'Open the app, sign in with your registered email, and complete Identity Enrollment to activate Face Identity access. Your verified face scan will grant access only to your pre-registered room under FAZEKEY RBAC policy.\r\n\r\n'
+        'Regards,\r\n'
+        'FAZEKEY Credentialing Services';
+    final uri = Uri(
+      scheme: 'mailto',
+      path: target,
+      queryParameters: {'subject': 'FAZEKEY Access Enrollment', 'body': body},
+    );
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!opened) throw Exception('Unable to open a local email application.');
   }
 
   Stream<List<Area>> watchAreas() => firestore
@@ -221,6 +273,9 @@ class FirebaseService {
 
   Future<void> addArea(Area area) =>
       firestore.collection('areas').add(area.toMap());
+
+  Future<void> deleteArea(String id) =>
+      firestore.collection('areas').doc(id).delete();
 
   Future<void> ensureSampleAreas() async {
     for (final entry in _sampleAreas.entries) {
@@ -399,7 +454,7 @@ class FirebaseService {
     department: '',
     phone: user.phoneNumber ?? '',
     room: '',
-    role: 'admin',
+    role: 'student',
     identityNumber: user.uid,
     course: '',
     faculty: 'FSKTM',
@@ -422,7 +477,7 @@ class FirebaseService {
         'Software Engineering',
         'Information Security',
       ],
-      allowedRoles: const ['User', 'Admin', 'Security', 'Staff'],
+      allowedRoles: const ['Student', 'Admin', 'Staff'],
       currentOccupancy: 0,
       capacity: 25,
     ),
@@ -435,7 +490,7 @@ class FirebaseService {
       active: true,
       createdAt: DateTime(2026, 1, 2),
       allowedDepartments: const ['Multimedia', 'Information Security'],
-      allowedRoles: const ['User', 'Admin', 'Security', 'Staff'],
+      allowedRoles: const ['Student', 'Admin', 'Staff'],
       currentOccupancy: 0,
       capacity: 25,
     ),
@@ -448,7 +503,7 @@ class FirebaseService {
       active: true,
       createdAt: DateTime(2026, 1, 3),
       allowedDepartments: const ['Information Security'],
-      allowedRoles: const ['Admin', 'Security'],
+      allowedRoles: const ['Admin', 'Staff'],
       currentOccupancy: 0,
       capacity: 10,
     ),

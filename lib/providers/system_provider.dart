@@ -70,6 +70,12 @@ class SystemProvider extends ChangeNotifier {
   Future<void> toggleMaintenanceMode(bool value) =>
       save(settings.copyWith(maintenanceMode: value));
 
+  Future<void> toggleLowLightEnhancement(bool value) =>
+      save(settings.copyWith(lowLightEnhancement: value));
+
+  Future<void> toggleHardwarePowerSaveMode(bool value) =>
+      save(settings.copyWith(hardwarePowerSaveMode: value));
+
   Future<void> updateAfterHours({required int start, required int end}) {
     return save(settings.copyWith(afterHoursStart: start, afterHoursEnd: end));
   }

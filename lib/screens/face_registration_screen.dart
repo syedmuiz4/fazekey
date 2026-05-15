@@ -134,9 +134,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
     if (selectedUser != null && auth.loading && auth.user == null) {
       return const Scaffold(
         backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Center(child: CircularProgressIndicator()),
-        ),
+        body: SafeArea(child: Center(child: CircularProgressIndicator())),
       );
     }
     if (selectedUser != null && !auth.isAdmin) {
@@ -204,7 +202,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                   PrimaryButton(
                     label: _captures.length < 3
                         ? 'Capture Sample'
-                        : 'Save Biometric Profile',
+                        : 'Save Face Identity Profile',
                     loading: _busy || face.loading,
                     icon: _captures.length < 3
                         ? Icons.camera_alt_rounded

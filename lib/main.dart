@@ -52,6 +52,7 @@ class FaceKeyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        Provider<FirebaseService>.value(value: firebase),
         ChangeNotifierProvider(
           create: (_) => AuthProvider(firebase, localDb)..bootstrap(),
         ),
@@ -71,9 +72,8 @@ class FaceKeyApp extends StatelessWidget {
           return MaterialApp(
             title: 'Campus Access',
             debugShowCheckedModeBanner: false,
-            themeMode: auth.darkMode ? ThemeMode.dark : ThemeMode.light,
+            themeMode: ThemeMode.light,
             theme: _theme(Brightness.light),
-            darkTheme: _theme(Brightness.dark),
             initialRoute: SplashScreen.route,
             routes: {
               SplashScreen.route: (_) => const SplashScreen(),
@@ -96,31 +96,44 @@ class FaceKeyApp extends StatelessWidget {
   }
 
   ThemeData _theme(Brightness brightness) {
-    final dark = brightness == Brightness.dark;
+    const frostBackground = Color(0xFFF0F9FF);
+    const deepTeal = Color(0xFF0D9488);
     final base = ThemeData(
       useMaterial3: true,
-      brightness: brightness,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF6C63FF),
-        brightness: brightness,
-      ),
+      brightness: Brightness.light,
+      colorScheme:
+          ColorScheme.fromSeed(
+            seedColor: deepTeal,
+            brightness: Brightness.light,
+          ).copyWith(
+            primary: deepTeal,
+            secondary: const Color(0xFF0284C7),
+            surface: Colors.white,
+            surfaceContainerHighest: const Color(0xFFE0F2FE),
+          ),
       textTheme: GoogleFonts.spaceGroteskTextTheme(
-        ThemeData(brightness: brightness).textTheme,
+        ThemeData(brightness: Brightness.light).textTheme,
       ),
     );
     return base.copyWith(
-      scaffoldBackgroundColor: dark
-          ? const Color(0xFF080A12)
-          : const Color(0xFFF6F7FB),
-      appBarTheme: const AppBarTheme(centerTitle: false, elevation: 0),
+      scaffoldBackgroundColor: frostBackground,
+      appBarTheme: const AppBarTheme(
+        centerTitle: false,
+        elevation: 0,
+        foregroundColor: Color(0xFF0F172A),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: dark
-            ? Colors.white.withValues(alpha: .07)
-            : Colors.white.withValues(alpha: .72),
+        fillColor: Colors.white.withValues(alpha: .82),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: deepTeal,
+          foregroundColor: Colors.white,
         ),
       ),
       cardTheme: CardThemeData(

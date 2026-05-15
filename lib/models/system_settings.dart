@@ -7,6 +7,8 @@ class SystemSettings {
     required this.intrusionAlerts,
     required this.monitoringWindowLogging,
     required this.maintenanceMode,
+    required this.lowLightEnhancement,
+    required this.hardwarePowerSaveMode,
     required this.afterHoursStart,
     required this.afterHoursEnd,
     required this.semesterStart,
@@ -20,6 +22,8 @@ class SystemSettings {
   final bool intrusionAlerts;
   final bool monitoringWindowLogging;
   final bool maintenanceMode;
+  final bool lowLightEnhancement;
+  final bool hardwarePowerSaveMode;
   final int afterHoursStart;
   final int afterHoursEnd;
   final DateTime semesterStart;
@@ -33,6 +37,8 @@ class SystemSettings {
     intrusionAlerts: true,
     monitoringWindowLogging: true,
     maintenanceMode: false,
+    lowLightEnhancement: true,
+    hardwarePowerSaveMode: false,
     afterHoursStart: 8,
     afterHoursEnd: 10,
     semesterStart: DateTime(2026, 3, 1),
@@ -50,6 +56,8 @@ class SystemSettings {
       intrusionAlerts: map['intrusionAlerts'] ?? true,
       monitoringWindowLogging: map['monitoringWindowLogging'] ?? true,
       maintenanceMode: map['maintenanceMode'] ?? false,
+      lowLightEnhancement: map['lowLightEnhancement'] ?? true,
+      hardwarePowerSaveMode: map['hardwarePowerSaveMode'] ?? false,
       afterHoursStart: map['accessWindowStart'] ?? map['afterHoursStart'] ?? 8,
       afterHoursEnd: map['accessWindowEnd'] ?? map['afterHoursEnd'] ?? 10,
       semesterStart:
@@ -75,6 +83,8 @@ class SystemSettings {
     'intrusionAlerts': intrusionAlerts,
     'monitoringWindowLogging': monitoringWindowLogging,
     'maintenanceMode': maintenanceMode,
+    'lowLightEnhancement': lowLightEnhancement,
+    'hardwarePowerSaveMode': hardwarePowerSaveMode,
     'accessWindowStart': afterHoursStart,
     'accessWindowEnd': afterHoursEnd,
     'semesterStart': Timestamp.fromDate(semesterStart),
@@ -128,6 +138,8 @@ class SystemSettings {
     bool? intrusionAlerts,
     bool? monitoringWindowLogging,
     bool? maintenanceMode,
+    bool? lowLightEnhancement,
+    bool? hardwarePowerSaveMode,
     int? afterHoursStart,
     int? afterHoursEnd,
     DateTime? semesterStart,
@@ -140,6 +152,8 @@ class SystemSettings {
     monitoringWindowLogging:
         monitoringWindowLogging ?? this.monitoringWindowLogging,
     maintenanceMode: maintenanceMode ?? this.maintenanceMode,
+    lowLightEnhancement: lowLightEnhancement ?? this.lowLightEnhancement,
+    hardwarePowerSaveMode: hardwarePowerSaveMode ?? this.hardwarePowerSaveMode,
     afterHoursStart: afterHoursStart ?? this.afterHoursStart,
     afterHoursEnd: afterHoursEnd ?? this.afterHoursEnd,
     semesterStart: semesterStart ?? this.semesterStart,

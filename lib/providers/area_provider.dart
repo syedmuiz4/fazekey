@@ -60,6 +60,19 @@ class AreaProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> deleteArea(String id) async {
+    loading = true;
+    error = null;
+    notifyListeners();
+    try {
+      await _firebase.deleteArea(id);
+    } catch (e) {
+      error = e.toString();
+    }
+    loading = false;
+    notifyListeners();
+  }
+
   Future<void> refresh() async {
     _sub?.cancel();
     _sub = null;

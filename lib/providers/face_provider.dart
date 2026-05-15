@@ -70,6 +70,9 @@ class FaceProvider extends ChangeNotifier {
       final match = await _face.identify(capture);
       lastDistance = match?.distance;
       final user = match == null ? null : await _firebase.getUser(match.userId);
+      if (match != null && user == null) {
+        error = 'Face matched a uid without an active user profile.';
+      }
       loading = false;
       notifyListeners();
       return user;

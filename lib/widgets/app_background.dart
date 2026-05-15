@@ -6,15 +6,16 @@ class AppBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: dark
-              ? const [Color(0xFF080A12), Color(0xFF17122E), Color(0xFF061B22)]
-              : const [Color(0xFFF7FAFF), Color(0xFFEDEBFF), Color(0xFFE6FFF6)],
+          colors: const [
+            Color(0xFFF0F9FF),
+            Color(0xFFE0F2FE),
+            Color(0xFFE6FFFB),
+          ],
         ),
       ),
       child: child,

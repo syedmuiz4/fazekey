@@ -27,13 +27,13 @@ class _FaceGuidePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
+      ..strokeWidth = 7
       ..strokeCap = StrokeCap.round
       ..color = color;
     final rect = Rect.fromCenter(
       center: size.center(Offset.zero),
-      width: size.width * .68,
-      height: size.height * .48,
+      width: size.width * .82,
+      height: size.height * .56,
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, const Radius.circular(120)),
@@ -44,10 +44,21 @@ class _FaceGuidePainter extends CustomPainter {
         ..shader = LinearGradient(
           colors: [Colors.transparent, color, Colors.transparent],
         ).createShader(rect)
-        ..strokeWidth = 3;
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round;
       canvas.drawLine(
-        Offset(rect.left + 24, rect.center.dy),
-        Offset(rect.right - 24, rect.center.dy),
+        Offset(rect.left + 30, rect.center.dy),
+        Offset(rect.right - 30, rect.center.dy),
+        line,
+      );
+      canvas.drawLine(
+        Offset(rect.left + 46, rect.top + rect.height * .32),
+        Offset(rect.right - 46, rect.top + rect.height * .32),
+        line,
+      );
+      canvas.drawLine(
+        Offset(rect.left + 46, rect.bottom - rect.height * .32),
+        Offset(rect.right - 46, rect.bottom - rect.height * .32),
         line,
       );
     }

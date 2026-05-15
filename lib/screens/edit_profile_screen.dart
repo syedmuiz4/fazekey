@@ -22,7 +22,7 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  final _firebase = FirebaseService();
+  late final FirebaseService _firebase;
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _matricNo = TextEditingController();
@@ -44,6 +44,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   void initState() {
     super.initState();
+    _firebase = context.read<FirebaseService>();
     _loadInitialProfile();
   }
 
@@ -107,7 +108,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           stream: auth.watchActiveUserProfile(),
           initialData: auth.user ?? _initialProfile,
           builder: (context, snapshot) {
-            final user = snapshot.data;
+            final user =
+                snapshot.data ??
+                auth.user ??
+                _currentProfile ??
+                _initialProfile;
             if (snapshot.connectionState == ConnectionState.waiting &&
                 user == null &&
                 _loadingInitialProfile) {
@@ -450,8 +455,8 @@ class _ProfileForm extends StatelessWidget {
                     ),
                     child: Text(
                       user.hasFace
-                          ? 'Re-enroll Face Data'
-                          : 'Register Face Data',
+                          ? 'Re-enroll Face Identity'
+                          : 'Register Face Identity',
                     ),
                   ),
                   const SizedBox(height: 10),

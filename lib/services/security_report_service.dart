@@ -19,15 +19,7 @@ class SecurityReportService {
 
   String buildCsv(List<AccessLog> logs) {
     final rows = [
-      [
-        'id',
-        'timestamp',
-        'status',
-        'user',
-        'area',
-        'reason',
-        'synced',
-      ],
+      ['id', 'timestamp', 'status', 'user', 'room', 'reason', 'synced'],
       for (final log in logs)
         [
           _clean(log.id),

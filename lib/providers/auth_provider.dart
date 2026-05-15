@@ -14,7 +14,7 @@ class AuthProvider extends ChangeNotifier {
   StreamSubscription<AppUser?>? _profileSub;
   AppUser? user;
   bool loading = true;
-  bool darkMode = true;
+  bool darkMode = false;
   String? error;
 
   bool get isAuthenticated => user != null;
@@ -24,6 +24,8 @@ class AuthProvider extends ChangeNotifier {
   bool get isUser => isAuthenticated && !isAdmin;
 
   bool get hasSignedInAccount => _firebase.currentUserId != null;
+
+  String? get signedInAccountId => _firebase.currentUserId;
 
   String? get passwordResetEmail {
     final accountEmail = _firebase.currentUserEmail?.trim();
@@ -134,10 +136,14 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Stream<AppUser?> watchActiveUserProfile() {
+    if (hasSignedInAccount) return _firebase.watchCurrentUserProfile();
     final activeUser = user;
     if (activeUser != null) return _firebase.watchUser(activeUser.id);
-    if (hasSignedInAccount) return _firebase.watchCurrentUserProfile();
     return Stream<AppUser?>.value(null);
+  }
+
+  Future<bool> validateAdminSession(AppUser profile) {
+    return _firebase.validateAdminSession(profile.id);
   }
 
   Stream<AppUser?> watchCurrentUserProfile() {
