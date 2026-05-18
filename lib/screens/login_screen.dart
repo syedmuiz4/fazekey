@@ -84,16 +84,17 @@ class _LoginScreenState extends State<LoginScreen> {
                             _password.text,
                           );
                           if (ok && context.mounted) {
-                            Navigator.pushReplacementNamed(
-                              context,
+                            Navigator.of(context).pushNamedAndRemoveUntil(
                               DashboardScreen.route,
+                              (_) => false,
                             );
                           }
                         },
                       ),
                       TextButton(
-                        onPressed: () =>
-                            Navigator.pushNamed(context, FaceLoginScreen.route),
+                        onPressed: () => Navigator.of(
+                          context,
+                        ).pushNamed(FaceLoginScreen.route),
                         child: const Text('Login with Face'),
                       ),
                     ],

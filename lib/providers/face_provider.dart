@@ -17,47 +17,57 @@ class FaceProvider extends ChangeNotifier {
   bool loading = false;
   String? error;
   double? lastDistance;
+  String? lastMatchedUserId;
+  bool _disposed = false;
 
   Future<bool> ensureModelReady() async {
     loading = true;
     error = null;
-    notifyListeners();
+    _notifyAfterFrame();
     try {
       await _face.initialize();
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return true;
     } catch (e) {
       error = e.toString();
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return false;
     }
   }
 
-  Future<bool> registerFace(AppUser user, List<XFile> captures) async {
+  Future<bool> registerFace(
+    AppUser user,
+    List<XFile> captures, {
+    String? userId,
+  }) async {
     loading = true;
     error = null;
-    notifyListeners();
+    _notifyAfterFrame();
     try {
+      final faceUserId = (userId ?? _firebase.currentUserId)?.trim();
+      if (faceUserId == null || faceUserId.isEmpty) {
+        throw Exception('A Firebase Auth UID is required for face enrollment.');
+      }
       final embedding = await _face.averageEmbeddings(captures);
       await _firebase.saveFace(
-        user.id,
+        faceUserId,
         embedding,
         photoUrl: captures.first.path,
       );
       await _face.localDb.upsertFace(
-        userId: user.id,
+        userId: faceUserId,
         name: user.name,
         embedding: embedding,
       );
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return true;
     } catch (e) {
       error = e.toString();
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return false;
     }
   }
@@ -65,21 +75,24 @@ class FaceProvider extends ChangeNotifier {
   Future<AppUser?> identify(XFile capture) async {
     loading = true;
     error = null;
-    notifyListeners();
+    lastMatchedUserId = null;
+    _notifyAfterFrame();
     try {
       final match = await _face.identify(capture);
       lastDistance = match?.distance;
+      lastMatchedUserId = match?.userId;
       final user = match == null ? null : await _firebase.getUser(match.userId);
       if (match != null && user == null) {
-        error = 'Face matched a uid without an active user profile.';
+        error =
+            'Face matched UID ${match.userId}, but no users/${match.userId} profile exists.';
       }
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return user;
     } catch (e) {
       error = e.toString();
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return null;
     }
   }
@@ -87,16 +100,16 @@ class FaceProvider extends ChangeNotifier {
   Future<bool> validateLiveness(XFile capture) async {
     loading = true;
     error = null;
-    notifyListeners();
+    _notifyAfterFrame();
     try {
       await _face.validateLiveness(capture);
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return true;
     } catch (e) {
       error = e.toString();
       loading = false;
-      notifyListeners();
+      _notifyAfterFrame();
       return false;
     }
   }
@@ -107,7 +120,7 @@ class FaceProvider extends ChangeNotifier {
     required AppUser? user,
     Area? area,
     String areaId = '',
-    String areaName = 'Campus Gate',
+    String areaName = 'No active room configured',
     String? status,
     String? reason,
     String? snapshotPath,
@@ -129,8 +142,17 @@ class FaceProvider extends ChangeNotifier {
     );
   }
 
+  void _notifyAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed) return;
+      notifyListeners();
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
     unawaited(_face.close());
     super.dispose();
   }

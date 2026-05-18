@@ -45,7 +45,7 @@ class UserDataExportService {
           _clean(user.phone),
           _clean(user.homeAddress),
           _clean(user.emergencyContact),
-          _clean(user.room),
+          _clean(user.assignedRoomsLabel),
           _clean(user.role),
           user.accessLevel,
           user.hasFace ? 'yes' : 'no',

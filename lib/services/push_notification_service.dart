@@ -15,7 +15,7 @@ class PushNotificationService {
   static const AndroidNotificationChannel _intrusionChannel =
       AndroidNotificationChannel(
         'intrusion_alerts',
-        'Intrusion Alerts',
+        'Security Notifications',
         description: 'High-priority intrusion and lockdown alerts.',
         importance: Importance.max,
         playSound: true,
@@ -64,7 +64,7 @@ class PushNotificationService {
       NotificationDetails(
         android: AndroidNotificationDetails(
           'intrusion_alerts',
-          'Intrusion Alerts',
+          'Security Notifications',
           channelDescription: 'High-priority intrusion and lockdown alerts.',
           importance: Importance.max,
           priority: Priority.high,

@@ -34,6 +34,14 @@ class AreaProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> stop() async {
+    await _sub?.cancel();
+    _sub = null;
+    areas = [];
+    error = null;
+    notifyListeners();
+  }
+
   Future<void> addArea(Area area) async {
     loading = true;
     error = null;

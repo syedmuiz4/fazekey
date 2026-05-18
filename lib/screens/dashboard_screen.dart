@@ -1,16 +1,13 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show ImageFilter;
+import 'dart:math' as math;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:shimmer/shimmer.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import '../models/access_grant.dart';
 import '../models/access_log.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
@@ -21,15 +18,23 @@ import '../providers/log_provider.dart';
 import '../providers/system_provider.dart';
 import '../services/firebase_service.dart';
 import '../services/security_report_service.dart';
-import '../services/user_data_export_service.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 import 'add_area_screen.dart';
-import 'edit_profile_screen.dart';
 import 'face_login_screen.dart';
 import 'face_registration_screen.dart';
 import 'notifications_screen.dart';
 import 'welcome_screen.dart';
+
+enum _DashboardPage { command, directory, zones, timeline, archive, settings }
+
+enum _DirectoryMode { all, pendingReview }
+
+enum _ZoneFilter { activeRooms, capacityUsed, liveLogs }
+
+enum _RoomDetailView { settings, history }
+
+enum _ArchiveFilter { all, approvals, facePending, staff, students }
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -39,97 +44,12 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-void _pushNamedAfterFrame(
-  BuildContext context,
-  String route, {
-  Object? arguments,
-  bool rootNavigator = false,
-}) {
-  SchedulerBinding.instance.addPostFrameCallback((_) {
-    if (!context.mounted) return;
-    Navigator.of(
-      context,
-      rootNavigator: rootNavigator,
-    ).pushNamed(route, arguments: arguments);
-  });
-}
-
-void _signOutAndClear(BuildContext context, AuthProvider auth) {
-  Navigator.pushNamedAndRemoveUntil(context, WelcomeScreen.route, (_) => false);
-  unawaited(auth.logout());
-}
-
-void _showLogSnapshot(BuildContext context, String path) {
-  showDialog<void>(
-    context: context,
-    barrierColor: Colors.black.withValues(alpha: .78),
-    builder: (_) => Dialog.fullscreen(
-      backgroundColor: const Color(0xFF070A0F),
-      child: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Unknown Face Snapshot',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded, color: Colors.white),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Center(
-                child: File(path).existsSync()
-                    ? InteractiveViewer(
-                        child: Image.file(File(path), fit: BoxFit.contain),
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          'Snapshot is no longer available on this device.\n$path',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-const _campusFaculties = ['FSKTM', 'FKEE', 'FKAAB', 'FPTV'];
-const _fsktmHonoursPrograms = [
-  'Information Security',
-  'Multimedia Computing',
-  'Software Engineering',
-  'Web Technology',
-  'Information Technology',
-];
-const _adminPageCount = 7;
-const _adminInsightsIndex = 0;
-const _adminControlIndex = 3;
-
 class _DashboardScreenState extends State<DashboardScreen> {
-  int _index = 0;
-  String? _resolvedUserId;
-  String? _resolvedRole;
-  bool? _resolvedIsAdmin;
-  bool _roleResolutionQueued = false;
+  final Key _dashboardScaffoldKey = UniqueKey();
+  _DashboardPage _page = _DashboardPage.command;
+  _DirectoryMode _directoryMode = _DirectoryMode.all;
+  int _entryTimelineLimit = 30;
+  int _registrationSignal = 0;
 
   @override
   void initState() {
@@ -139,364 +59,343 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context.read<AreaProvider>().listen();
       final logs = context.read<LogProvider>();
       logs.listen();
-      logs.syncPending();
+      unawaited(logs.syncPending());
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    if (auth.loading && auth.user == null) {
-      return const AppBackground(
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          body: Center(child: CircularProgressIndicator()),
-        ),
-      );
-    }
-    return StreamBuilder<AppUser?>(
-      stream: auth.watchActiveUserProfile(),
-      initialData: auth.user,
-      builder: (context, snapshot) {
-        final user = snapshot.data;
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            user == null) {
-          return const AppBackground(
-            child: Scaffold(
-              backgroundColor: Colors.transparent,
-              body: Center(child: CircularProgressIndicator()),
-            ),
-          );
-        }
-        _syncAuthSnapshot(auth, user);
-        if (user == null) {
-          _queueRoleResolution(null);
-          _redirectToWelcome(context);
-          return const AppBackground(
-            child: Scaffold(
-              backgroundColor: Colors.transparent,
-              body: Center(child: CircularProgressIndicator()),
-            ),
-          );
-        }
-        if (_resolvedUserId != user.id ||
-            _resolvedRole != user.role ||
-            _resolvedIsAdmin == null) {
-          _queueRoleResolution(user);
-          return const AppBackground(
-            child: Scaffold(
-              backgroundColor: Colors.transparent,
-              body: Center(child: CircularProgressIndicator()),
-            ),
-          );
-        }
-        final isAdmin = _resolvedIsAdmin == true;
-        final maxIndex = isAdmin ? _adminPageCount - 1 : 3;
-        final selectedIndex = _index.clamp(0, maxIndex).toInt();
-        return isAdmin
-            ? _AdminShell(
-                user: user,
-                index: selectedIndex,
-                onIndexChanged: (i) => setState(() => _index = i),
-              )
-            : _UserShell(
-                user: user,
-                index: selectedIndex,
-                onIndexChanged: (i) => setState(() => _index = i),
-              );
+    final page = _page;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _handleBackPressed();
       },
+      child: AppBackground(
+        child: Scaffold(
+          key: _dashboardScaffoldKey,
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            title: Text(_pageTitle(page)),
+            actions: [
+              _NotificationBell(
+                onTap: () =>
+                    Navigator.pushNamed(context, NotificationsScreen.route),
+              ),
+              IconButton(
+                tooltip: 'Sign out',
+                onPressed: _signOutAndClear,
+                icon: const Icon(Icons.logout_rounded),
+              ),
+            ],
+          ),
+          body: _bodyForPage(page),
+          floatingActionButton: _floatingActionButton(page),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: page.index,
+            labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
+            onDestinationSelected: (index) {
+              setState(() => _page = _DashboardPage.values[index]);
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.dashboard_rounded),
+                label: 'Command',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.badge_rounded),
+                label: 'Directory',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.meeting_room_rounded),
+                label: 'Zones',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.terminal_rounded),
+                label: 'Timeline',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.inventory_2_rounded),
+                label: 'Archive',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.tune_rounded),
+                label: 'Settings',
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  void _redirectToWelcome(BuildContext context) {
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      if (!context.mounted) return;
-      Navigator.pushNamedAndRemoveUntil(
-        context,
-        WelcomeScreen.route,
-        (_) => false,
-      );
-    });
+  Widget _bodyForPage(_DashboardPage page) {
+    switch (page) {
+      case _DashboardPage.command:
+        return _CommandDashboardTab(
+          onOpenDirectory: _openDirectory,
+          onOpenZones: () => _selectPage(_DashboardPage.zones),
+          onOpenTimeline: _openEntryTimeline,
+        );
+      case _DashboardPage.directory:
+        return _UserDirectoryTab(
+          mode: _directoryMode,
+          registrationSignal: _registrationSignal,
+          onModeChanged: (mode) => setState(() => _directoryMode = mode),
+        );
+      case _DashboardPage.zones:
+        return _ZoneControlTab(onOpenTimeline: _openEntryTimeline);
+      case _DashboardPage.timeline:
+        return _EntryTimelineTab(initialLimit: _entryTimelineLimit);
+      case _DashboardPage.archive:
+        return const _UserDataArchiveTab();
+      case _DashboardPage.settings:
+        return _SettingsTab(onSignOut: _signOutAndClear);
+    }
   }
 
-  void _syncAuthSnapshot(AuthProvider auth, AppUser? user) {
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      auth.syncProfileSnapshot(user);
-    });
-  }
-
-  void _queueRoleResolution(AppUser? user) {
-    if (_roleResolutionQueued) return;
-    _roleResolutionQueued = true;
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (user == null) {
-        setState(() {
-          _resolvedUserId = null;
-          _resolvedRole = null;
-          _resolvedIsAdmin = false;
-          _roleResolutionQueued = false;
-        });
-        return;
-      }
-      context
-          .read<AuthProvider>()
-          .validateAdminSession(user)
-          .then((isAdmin) {
-            if (!mounted) return;
-            setState(() {
-              _resolvedUserId = user.id;
-              _resolvedRole = user.role;
-              _resolvedIsAdmin = isAdmin;
-              if (isAdmin) {
-                _index = _adminInsightsIndex;
-              } else if (_index > 3) {
-                _index = 0;
-              }
-              _roleResolutionQueued = false;
-            });
-          })
-          .catchError((_) {
-            if (!mounted) return;
-            setState(() {
-              _resolvedUserId = user.id;
-              _resolvedRole = user.role;
-              _resolvedIsAdmin = false;
-              _index = _index.clamp(0, 3).toInt();
-              _roleResolutionQueued = false;
-            });
+  Widget? _floatingActionButton(_DashboardPage page) {
+    if (page == _DashboardPage.directory) {
+      return FloatingActionButton.extended(
+        onPressed: () {
+          setState(() {
+            _directoryMode = _DirectoryMode.all;
+            _registrationSignal++;
           });
+        },
+        icon: const Icon(Icons.manage_accounts_rounded),
+        label: const Text('Manage Access'),
+      );
+    }
+    if (page == _DashboardPage.zones) {
+      return FloatingActionButton.extended(
+        onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route),
+        icon: const Icon(Icons.playlist_add_rounded),
+        label: const Text('Linked Rooms'),
+      );
+    }
+    return null;
+  }
+
+  void _selectPage(_DashboardPage page) {
+    setState(() => _page = page);
+  }
+
+  void _openDirectory(_DirectoryMode mode) {
+    setState(() {
+      _page = _DashboardPage.directory;
+      _directoryMode = mode;
     });
+  }
+
+  void _openEntryTimeline({int limit = 30}) {
+    setState(() {
+      _page = _DashboardPage.timeline;
+      _entryTimelineLimit = limit;
+    });
+  }
+
+  Future<void> _handleBackPressed() async {
+    if (_page != _DashboardPage.command) {
+      setState(() => _page = _DashboardPage.command);
+      return;
+    }
+    await _signOutAndClear();
+  }
+
+  Future<void> _signOutAndClear() async {
+    final auth = context.read<AuthProvider>();
+    final ok = await auth.logout();
+    if (!mounted || !ok) return;
+    Navigator.of(
+      context,
+      rootNavigator: true,
+    ).pushNamedAndRemoveUntil(WelcomeScreen.route, (_) => false);
+  }
+
+  String _pageTitle(_DashboardPage page) {
+    switch (page) {
+      case _DashboardPage.command:
+        return 'Command Dashboard';
+      case _DashboardPage.directory:
+        return 'User Directory';
+      case _DashboardPage.zones:
+        return 'Zone Control';
+      case _DashboardPage.timeline:
+        return 'Entry Timeline';
+      case _DashboardPage.archive:
+        return 'User Data Archive';
+      case _DashboardPage.settings:
+        return 'System Preferences';
+    }
   }
 }
 
-class _AdminShell extends StatelessWidget {
-  const _AdminShell({
-    required this.user,
-    required this.index,
-    required this.onIndexChanged,
-  });
+class _NotificationBell extends StatelessWidget {
+  const _NotificationBell({required this.onTap});
 
-  final AppUser user;
-  final int index;
-  final ValueChanged<int> onIndexChanged;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      _HomeTab(
-        user: user,
-        onOpenRoomControl: () => onIndexChanged(_adminControlIndex),
-      ),
-      const _UserRegistrationTab(),
-      const _StudentDataArchiveTab(),
-      const _RoomControlCenterTab(),
-      const _NodeTerminalManagerTab(),
-      const _AcademicCycleSyncTab(),
-      const _SettingsTab(),
-    ];
-    final labels = const [
-      'Insights',
-      'Identity',
-      'User Data Archive',
-      'Control',
-      'Node Terminal Manager',
-      'Academic Cycle Sync',
-      'Environmental Protocol Overrides',
-    ];
-    return AppBackground(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          title: Text(labels[index]),
-          actions: [
-            Consumer<AlertProvider>(
-              builder: (context, alerts, _) {
-                final count = alerts.unreadCount;
-                return IconButton(
-                  onPressed: () =>
-                      _pushNamedAfterFrame(context, NotificationsScreen.route),
-                  icon: Badge(
-                    isLabelVisible: count > 0,
-                    label: Text(count > 99 ? '99+' : '$count'),
-                    child: const Icon(Icons.notifications_rounded),
+    final unread = context.watch<AlertProvider>().unreadCount;
+    return IconButton(
+      tooltip: 'Notifications',
+      onPressed: onTap,
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(Icons.notifications_rounded),
+          if (unread > 0)
+            Positioned(
+              right: -4,
+              top: -4,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE11D48),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
                   ),
+                  child: Text(
+                    unread > 9 ? '9+' : '$unread',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommandDashboardTab extends StatelessWidget {
+  const _CommandDashboardTab({
+    required this.onOpenDirectory,
+    required this.onOpenZones,
+    required this.onOpenTimeline,
+  });
+
+  final ValueChanged<_DirectoryMode> onOpenDirectory;
+  final VoidCallback onOpenZones;
+  final void Function({int limit}) onOpenTimeline;
+
+  @override
+  Widget build(BuildContext context) {
+    final logs = context.watch<LogProvider>().logs;
+    final areas = context.watch<AreaProvider>().areas;
+    final firebase = context.read<FirebaseService>();
+    return StreamBuilder<List<AppUser>>(
+      stream: firebase.watchAllUsers(),
+      builder: (context, snapshot) {
+        final users = snapshot.data ?? const <AppUser>[];
+        final activeToday = logs
+            .where(
+              (log) => log.granted && _sameDay(log.timestamp, DateTime.now()),
+            )
+            .length;
+        final pendingReview = users.where(_needsAdminReview).length;
+        return ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final crossAxisCount = constraints.maxWidth > 720 ? 4 : 2;
+                return GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: crossAxisCount,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: constraints.maxWidth > 720 ? 1.35 : 1.18,
+                  children: [
+                    _CommandMetricCard(
+                      title: 'Active Today',
+                      value: '$activeToday',
+                      icon: Icons.verified_user_rounded,
+                      onTap: () => onOpenTimeline(limit: 30),
+                    ),
+                    _CommandMetricCard(
+                      title: 'Total Users',
+                      value: '${users.length}',
+                      icon: Icons.groups_rounded,
+                      onTap: () => onOpenDirectory(_DirectoryMode.all),
+                    ),
+                    _CommandMetricCard(
+                      title: 'Pending Review',
+                      value: '$pendingReview',
+                      icon: Icons.pending_actions_rounded,
+                      onTap: () =>
+                          onOpenDirectory(_DirectoryMode.pendingReview),
+                    ),
+                    _CommandMetricCard(
+                      title: 'Rooms',
+                      value: '${areas.length}',
+                      icon: Icons.meeting_room_rounded,
+                      onTap: onOpenZones,
+                    ),
+                  ],
                 );
               },
             ),
+            const SizedBox(height: 14),
+            _LiveLogsShortcut(onTap: () => onOpenTimeline(limit: 30)),
+            const SizedBox(height: 14),
+            _OperationalPulse(logs: logs, areas: areas),
           ],
-        ),
-        drawer: _AdminNavigationDrawer(
-          user: user,
-          selectedIndex: index,
-          onDestinationSelected: (i) {
-            SchedulerBinding.instance.addPostFrameCallback((_) {
-              if (!context.mounted) return;
-              Navigator.pop(context);
-              onIndexChanged(i);
-            });
-          },
-        ),
-        body: pages[index],
-      ),
+        );
+      },
     );
   }
 }
 
-class _AdminNavigationDrawer extends StatelessWidget {
-  const _AdminNavigationDrawer({
-    required this.user,
-    required this.selectedIndex,
-    required this.onDestinationSelected,
+class _CommandMetricCard extends StatelessWidget {
+  const _CommandMetricCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.onTap,
   });
 
-  final AppUser user;
-  final int selectedIndex;
-  final ValueChanged<int> onDestinationSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      child: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-              child: _AdminProfileCard(user: user),
-            ),
-            Expanded(
-              child: NavigationDrawer(
-                selectedIndex: selectedIndex,
-                onDestinationSelected: onDestinationSelected,
-                children: [
-                  const _DrawerGroupLabel('Insights'),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.analytics_rounded),
-                    label: Text('Insights'),
-                  ),
-                  const SizedBox(height: 12),
-                  const _DrawerGroupLabel('Identity'),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.manage_accounts_rounded),
-                    label: Text('Identity'),
-                  ),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.inventory_2_rounded),
-                    label: Text('User Data Archive'),
-                  ),
-                  const SizedBox(height: 12),
-                  const _DrawerGroupLabel('Control'),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.rule_folder_rounded),
-                    label: Text('Control'),
-                  ),
-                  const SizedBox(height: 12),
-                  const _DrawerGroupLabel('Core Systems'),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.sensors_rounded),
-                    label: Text('Node Terminal Manager'),
-                  ),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.event_available_rounded),
-                    label: Text('Academic Cycle Sync'),
-                  ),
-                  const NavigationDrawerDestination(
-                    icon: Icon(Icons.schedule_rounded),
-                    label: Text('Environmental Protocol Overrides'),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            ListTile(
-              leading: Icon(
-                Icons.logout_rounded,
-                color: Theme.of(context).colorScheme.error,
-              ),
-              title: Text(
-                'Logout',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-              onTap: () async {
-                final auth = context.read<AuthProvider>();
-                _signOutAndClear(context, auth);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AdminProfileCard extends StatelessWidget {
-  const _AdminProfileCard({required this.user});
-
-  final AppUser user;
+  final String title;
+  final String value;
+  final IconData icon;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return GlassCard(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      child: Row(
+      onTap: onTap,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              _FaceAvatar(user: user),
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  width: 14,
-                  height: 14,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF32D583),
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Theme.of(context).colorScheme.surface,
-                      width: 2,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  user.name.isEmpty ? 'Administrator' : user.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'System Version 2.0',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.circle, size: 8, color: Color(0xFF32D583)),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Online',
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ],
-                ),
-              ],
+          Icon(icon, size: 28),
+          const Spacer(),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
             ),
+          ),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w800),
           ),
         ],
       ),
@@ -504,134 +403,348 @@ class _AdminProfileCard extends StatelessWidget {
   }
 }
 
-class _DrawerGroupLabel extends StatelessWidget {
-  const _DrawerGroupLabel(this.label);
+class _LiveLogsShortcut extends StatelessWidget {
+  const _LiveLogsShortcut({required this.onTap});
 
-  final String label;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 18, 16, 8),
-      child: Text(
-        label.toUpperCase(),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          fontWeight: FontWeight.w900,
-          letterSpacing: 0,
-        ),
+    final logs = context.watch<LogProvider>().logs;
+    final denied = logs.where((log) => !log.granted).length;
+    return GlassCard(
+      onTap: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        children: [
+          const CircleAvatar(child: Icon(Icons.terminal_rounded)),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Live Logs',
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+            ),
+          ),
+          Chip(
+            avatar: const Icon(Icons.rule_rounded, size: 18),
+            label: Text('${logs.length} rows'),
+            visualDensity: VisualDensity.compact,
+          ),
+          const SizedBox(width: 8),
+          Chip(
+            avatar: const Icon(Icons.block_rounded, size: 18),
+            label: Text('$denied denied'),
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
       ),
     );
   }
 }
 
-class _StudentDataArchiveTab extends StatelessWidget {
-  const _StudentDataArchiveTab();
+class _OperationalPulse extends StatelessWidget {
+  const _OperationalPulse({required this.logs, required this.areas});
+
+  final List<AccessLog> logs;
+  final List<Area> areas;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<AppUser>>(
-      stream: FirebaseService().watchAllUsers(),
-      builder: (context, snapshot) {
-        final users = snapshot.data ?? const <AppUser>[];
-        final students = users.where((user) => !user.isAdmin).toList();
-        return ListView(
-          padding: const EdgeInsets.all(18),
-          children: [
-            const _UserSectionHeader(
-              title: 'User Data Archive',
-              subtitle: 'Bulk user identity data management and exports',
-            ),
-            const SizedBox(height: 12),
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-              childAspectRatio: 1.7,
-              children: [
-                _ArchiveMetric(label: 'Profiles', value: '${users.length}'),
-                _ArchiveMetric(label: 'Students', value: '${students.length}'),
-                _ArchiveMetric(
-                  label: 'Face Enrolled',
-                  value: '${users.where((user) => user.hasFace).length}',
-                ),
-                _ArchiveMetric(
-                  label: 'Pending Face',
-                  value: '${users.where((user) => !user.hasFace).length}',
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            FilledButton.icon(
-              onPressed: users.isEmpty
-                  ? null
-                  : () => _exportArchive(context, users),
-              icon: const Icon(Icons.download_rounded),
-              label: const Text('Export User Archive'),
-            ),
-            const SizedBox(height: 12),
-            for (final user in users)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: GlassCard(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                  child: ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      user.hasFace
-                          ? Icons.verified_user_rounded
-                          : Icons.person_search_rounded,
+    final capacity = areas.fold<int>(0, (sum, area) => sum + area.capacity);
+    final occupied = areas.fold<int>(
+      0,
+      (sum, area) => sum + area.currentOccupancy,
+    );
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Operations',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 210,
+            child: BarChart(
+              BarChartData(
+                maxY: _chartMaxY(logs),
+                borderData: FlBorderData(show: false),
+                gridData: const FlGridData(show: true, horizontalInterval: 10),
+                titlesData: FlTitlesData(
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  leftTitles: const AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 36,
+                      interval: 10,
                     ),
-                    title: Text(
-                      user.name.isEmpty ? 'Unnamed profile' : user.name,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (value, _) {
+                        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+                        return Text(days[value.toInt().clamp(0, 4)]);
+                      },
                     ),
-                    subtitle: Text(
-                      '${user.identityNumber.isEmpty ? user.id : user.identityNumber}\n'
-                      '${user.faculty.isEmpty ? 'Faculty pending' : user.faculty} - '
-                      '${user.course.isEmpty ? user.department : user.course}',
-                    ),
-                    isThreeLine: true,
                   ),
                 ),
+                barGroups: List.generate(5, (index) {
+                  final day = _workWeekStart().add(Duration(days: index));
+                  final count = logs
+                      .where((log) => _sameDay(log.timestamp, day))
+                      .length;
+                  return BarChartGroupData(
+                    x: index,
+                    barRods: [
+                      BarChartRodData(
+                        toY: count.toDouble(),
+                        borderRadius: BorderRadius.circular(6),
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ],
+                  );
+                }),
               ),
+            ),
+          ),
+          if (capacity > 0) ...[
+            const SizedBox(height: 14),
+            LinearProgressIndicator(
+              value: (occupied / capacity).clamp(0, 1),
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Capacity used: $occupied / $capacity',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UserDirectoryTab extends StatefulWidget {
+  const _UserDirectoryTab({
+    required this.mode,
+    required this.registrationSignal,
+    required this.onModeChanged,
+  });
+
+  final _DirectoryMode mode;
+  final int registrationSignal;
+  final ValueChanged<_DirectoryMode> onModeChanged;
+
+  @override
+  State<_UserDirectoryTab> createState() => _UserDirectoryTabState();
+}
+
+class _UserDirectoryTabState extends State<_UserDirectoryTab> {
+  final _search = TextEditingController();
+  bool _registrationOpen = false;
+  late int _lastRegistrationSignal = widget.registrationSignal;
+
+  @override
+  void didUpdateWidget(covariant _UserDirectoryTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.registrationSignal != _lastRegistrationSignal) {
+      _lastRegistrationSignal = widget.registrationSignal;
+      _registrationOpen = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    final areas = context.watch<AreaProvider>().areas;
+    return StreamBuilder<List<AppUser>>(
+      stream: firebase.watchAllUsers(),
+      builder: (context, userSnapshot) {
+        final users = userSnapshot.data ?? const <AppUser>[];
+        return StreamBuilder<List<AccessGrant>>(
+          stream: firebase.watchAccessGrants(limit: 300),
+          builder: (context, grantSnapshot) {
+            final grants = grantSnapshot.data ?? const <AccessGrant>[];
+            final grantsByUser = <String, int>{};
+            final now = DateTime.now();
+            for (final grant in grants) {
+              if (grant.isActiveAt(now)) {
+                grantsByUser.update(
+                  grant.userId,
+                  (count) => count + 1,
+                  ifAbsent: () => 1,
+                );
+              }
+            }
+            final filtered = _filteredUsers(users);
+            return ListView(
+              padding: const EdgeInsets.all(18),
+              children: [
+                _NewRegistrationCard(
+                  areas: areas,
+                  expanded: _registrationOpen,
+                  onToggle: () =>
+                      setState(() => _registrationOpen = !_registrationOpen),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _search,
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.search_rounded),
+                          hintText: 'Search identities',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    FilterChip(
+                      selected: widget.mode == _DirectoryMode.pendingReview,
+                      onSelected: (selected) => widget.onModeChanged(
+                        selected
+                            ? _DirectoryMode.pendingReview
+                            : _DirectoryMode.all,
+                      ),
+                      avatar: const Icon(Icons.pending_actions_rounded),
+                      label: const Text('Pending'),
+                    ),
+                  ],
+                ),
+                if (userSnapshot.hasError || grantSnapshot.hasError) ...[
+                  const SizedBox(height: 12),
+                  _InlineError(
+                    message:
+                        'Directory sync is temporarily unavailable. Existing records remain visible when cached.',
+                  ),
+                ],
+                const SizedBox(height: 12),
+                if (filtered.isEmpty)
+                  const _EmptyState(
+                    icon: Icons.badge_rounded,
+                    title: 'No identities found',
+                  )
+                else
+                  for (final user in filtered)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _UserDirectoryCard(
+                        user: user,
+                        permissionCount: math.max(
+                          user.assignedRooms.length,
+                          grantsByUser[user.id] ?? 0,
+                        ),
+                        onEdit: () => _openEditPanel(context, user, areas),
+                      ),
+                    ),
+              ],
+            );
+          },
         );
       },
     );
   }
 
-  Future<void> _exportArchive(BuildContext context, List<AppUser> users) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final file = await UserDataExportService().writeCsv(users);
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('User archive ready to share.')),
-      );
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          subject: 'FAZEKEY User Data Archive',
-          text: 'FAZEKEY user data archive',
-        ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Unable to export archive: $e')),
-      );
-    }
+  List<AppUser> _filteredUsers(List<AppUser> users) {
+    final query = _search.text.trim().toLowerCase();
+    return users.where((user) {
+      if (widget.mode == _DirectoryMode.pendingReview &&
+          !_needsAdminReview(user)) {
+        return false;
+      }
+      if (query.isEmpty) return true;
+      return [
+        user.name,
+        user.email,
+        user.identityNumber,
+        user.roleLabel,
+        user.assignedRoomsLabel,
+      ].join(' ').toLowerCase().contains(query);
+    }).toList();
+  }
+
+  void _openEditPanel(BuildContext context, AppUser user, List<Area> areas) {
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close',
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return _UserEditPanel(user: user, areas: areas);
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1, 0),
+            end: Offset.zero,
+          ).animate(curved),
+          child: child,
+        );
+      },
+    );
   }
 }
 
-class _ArchiveMetric extends StatelessWidget {
-  const _ArchiveMetric({required this.label, required this.value});
+class _NewRegistrationCard extends StatefulWidget {
+  const _NewRegistrationCard({
+    required this.areas,
+    required this.expanded,
+    required this.onToggle,
+  });
 
-  final String label;
-  final String value;
+  final List<Area> areas;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  State<_NewRegistrationCard> createState() => _NewRegistrationCardState();
+}
+
+class _NewRegistrationCardState extends State<_NewRegistrationCard> {
+  final _form = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _identity = TextEditingController();
+  final _email = TextEditingController();
+  final _department = TextEditingController();
+  final _phone = TextEditingController();
+  final List<String> _selectedRooms = [];
+  String _position = 'Student';
+  int _accessLevel = 2;
+  DateTime _startAt = DateTime.now();
+  DateTime _endAt = DateTime.now().add(const Duration(days: 90));
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _identity.dispose();
+    _email.dispose();
+    _department.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -639,668 +752,963 @@ class _ArchiveMetric extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            value,
-            style: Theme.of(
-              context,
-            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+          Row(
+            children: [
+              const CircleAvatar(child: Icon(Icons.person_add_alt_1_rounded)),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'New Registration',
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: widget.onToggle,
+                icon: Icon(
+                  widget.expanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                ),
+                label: const Text('Manage Access'),
+              ),
+            ],
           ),
-          const Spacer(),
-          Text(label),
+          if (widget.expanded) ...[
+            const SizedBox(height: 14),
+            Form(
+              key: _form,
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _name,
+                    decoration: const InputDecoration(labelText: 'Full Name'),
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _identity,
+                          decoration: const InputDecoration(
+                            labelText: 'Unique ID',
+                          ),
+                          validator: _required,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _email,
+                          decoration: const InputDecoration(labelText: 'Email'),
+                          validator: _required,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _department,
+                          decoration: const InputDecoration(
+                            labelText: 'Department',
+                          ),
+                          validator: _required,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _phone,
+                          decoration: const InputDecoration(labelText: 'Phone'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _PositionToggle(
+                    value: _position,
+                    onChanged: (value) => setState(() => _position = value),
+                  ),
+                  const SizedBox(height: 10),
+                  _RoomMultiSelectField(
+                    title: 'Manage Access',
+                    options: widget.areas.map(_roomLabel).toList(),
+                    selected: _selectedRooms,
+                    onChanged: (rooms) {
+                      setState(() {
+                        _selectedRooms
+                          ..clear()
+                          ..addAll(rooms);
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _DateButton(
+                          label: 'Start',
+                          value: _startAt,
+                          onTap: () => _pickDate(start: true),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _DateButton(
+                          label: 'End',
+                          value: _endAt,
+                          onTap: () => _pickDate(start: false),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<int>(
+                    initialValue: _accessLevel,
+                    decoration: const InputDecoration(
+                      labelText: 'Access Level',
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 1, child: Text('Level 1')),
+                      DropdownMenuItem(value: 2, child: Text('Level 2')),
+                      DropdownMenuItem(value: 3, child: Text('Level 3')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) setState(() => _accessLevel = value);
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      icon: _saving
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.verified_user_rounded),
+                      label: Text(_saving ? 'Saving' : 'Save Registration'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    if (!_form.currentState!.validate()) return;
+    if (_selectedRooms.isEmpty) {
+      _showSnack('Select at least one room or add a custom room ID.');
+      return;
+    }
+    if (!_endAt.isAfter(_startAt)) {
+      _showSnack('End date must be after the start date.');
+      return;
+    }
+    setState(() => _saving = true);
+    final firebase = context.read<FirebaseService>();
+    try {
+      final created = await firebase.createManagedUser(
+        name: _name.text,
+        identityNumber: _identity.text,
+        email: _email.text,
+        department: _department.text,
+        phone: _phone.text,
+        room: _selectedRooms.first,
+        rooms: _selectedRooms,
+        role: 'user',
+        accessLevel: _accessLevel,
+        position: _position,
+      );
+      final assignedUser = created.copyWith(
+        room: _selectedRooms.first,
+        rooms: _selectedRooms,
+        status: 'approved',
+        position: _position,
+      );
+      for (final area in widget.areas) {
+        if (!_selectedRooms.any(
+          (room) => _sameAccessTarget(room, _roomLabel(area)),
+        )) {
+          continue;
+        }
+        await firebase.grantRoomAccess(
+          user: assignedUser,
+          area: area,
+          startAt: _startAt,
+          endAt: _endAt,
+        );
+      }
+      await firebase.approveUserAccess(
+        userId: created.id,
+        room: _selectedRooms.first,
+        rooms: _selectedRooms,
+        accessLevel: _accessLevel,
+      );
+      if (!mounted) return;
+      _showSnack(
+        'Registration saved with ${_selectedRooms.length} room links.',
+      );
+      _clear();
+    } catch (e) {
+      if (mounted) _showSnack(e.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _pickDate({required bool start}) async {
+    final initial = start ? _startAt : _endAt;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() {
+      if (start) {
+        _startAt = picked;
+        if (!_endAt.isAfter(_startAt)) {
+          _endAt = _startAt.add(const Duration(days: 1));
+        }
+      } else {
+        _endAt = picked;
+      }
+    });
+  }
+
+  void _clear() {
+    _name.clear();
+    _identity.clear();
+    _email.clear();
+    _department.clear();
+    _phone.clear();
+    setState(() {
+      _selectedRooms.clear();
+      _position = 'Student';
+      _accessLevel = 2;
+      _startAt = DateTime.now();
+      _endAt = DateTime.now().add(const Duration(days: 90));
+    });
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  static String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
+}
+
+class _PositionToggle extends StatelessWidget {
+  const _PositionToggle({required this.value, required this.onChanged});
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(
+            value: 'Student',
+            icon: Icon(Icons.school_rounded),
+            label: Text('Student'),
+          ),
+          ButtonSegment(
+            value: 'Staff',
+            icon: Icon(Icons.work_rounded),
+            label: Text('Staff'),
+          ),
+        ],
+        selected: {value},
+        onSelectionChanged: (selection) => onChanged(selection.first),
+      ),
+    );
+  }
+}
+
+class _DateButton extends StatelessWidget {
+  const _DateButton({
+    required this.label,
+    required this.value,
+    required this.onTap,
+  });
+
+  final String label;
+  final DateTime value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: const Icon(Icons.event_rounded),
+      label: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text('$label ${DateFormat.yMMMd().format(value)}'),
+      ),
+    );
+  }
+}
+
+class _RoomMultiSelectField extends StatefulWidget {
+  const _RoomMultiSelectField({
+    required this.title,
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String title;
+  final List<String> options;
+  final List<String> selected;
+  final ValueChanged<List<String>> onChanged;
+
+  @override
+  State<_RoomMultiSelectField> createState() => _RoomMultiSelectFieldState();
+}
+
+class _RoomMultiSelectFieldState extends State<_RoomMultiSelectField> {
+  final _search = TextEditingController();
+  final _custom = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _custom.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _search.text.trim().toLowerCase();
+    final options = widget.options
+        .where(
+          (option) => query.isEmpty || option.toLowerCase().contains(query),
+        )
+        .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(widget.title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        const SizedBox(height: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 92),
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final room in widget.selected)
+                  InputChip(
+                    label: Text(room),
+                    avatar: const Icon(Icons.vpn_key_rounded, size: 18),
+                    onDeleted: () => _toggle(room, false),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _search,
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search_rounded),
+            hintText: 'Search rooms',
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 190),
+          child: SingleChildScrollView(
+            child: Column(
+              children: [
+                for (final option in options)
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    value: widget.selected.any(
+                      (room) => _sameAccessTarget(room, option),
+                    ),
+                    onChanged: (checked) => _toggle(option, checked ?? false),
+                    title: Text(option),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+                if (options.isEmpty)
+                  const ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('No matching rooms'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _custom,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.add_location_alt_rounded),
+                  hintText: 'Add custom room ID',
+                ),
+                onSubmitted: (_) => _addCustom(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.filledTonal(
+              tooltip: 'Add custom',
+              onPressed: _addCustom,
+              icon: const Icon(Icons.add_rounded),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _toggle(String room, bool selected) {
+    final next = [...widget.selected];
+    next.removeWhere((value) => _sameAccessTarget(value, room));
+    if (selected) next.add(room.trim());
+    widget.onChanged(_dedupeRooms(next));
+  }
+
+  void _addCustom() {
+    final room = _custom.text.trim();
+    if (room.isEmpty) return;
+    _custom.clear();
+    widget.onChanged(_dedupeRooms([...widget.selected, room]));
+  }
+}
+
+class _UserDirectoryCard extends StatelessWidget {
+  const _UserDirectoryCard({
+    required this.user,
+    required this.permissionCount,
+    required this.onEdit,
+  });
+
+  final AppUser user;
+  final int permissionCount;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                child: Text(
+                  user.name.trim().isEmpty
+                      ? '?'
+                      : user.name.trim().characters.first.toUpperCase(),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  user.name.trim().isEmpty ? 'Unnamed Profile' : user.name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Edit identity',
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_rounded),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _StatusChip(
+                icon: Icons.fingerprint_rounded,
+                label: _uniqueId(user),
+              ),
+              _RoleBadge(role: user.roleLabel),
+              _FaceEnrollmentChip(enrolled: user.hasFace),
+              _StatusChip(
+                icon: Icons.vpn_key_rounded,
+                label: '$permissionCount permissions',
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 78),
+            child: SingleChildScrollView(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final room in user.assignedRooms)
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(Icons.meeting_room_rounded, size: 17),
+                      label: Text(room),
+                    ),
+                  if (user.assignedRooms.isEmpty)
+                    const Chip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text('No room links'),
+                    ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _NodeTerminalManagerTab extends StatelessWidget {
-  const _NodeTerminalManagerTab();
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    final areas = context.watch<AreaProvider>().areas;
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        const _UserSectionHeader(
-          title: 'Node Terminal Manager',
-          subtitle: 'Entry-point scanner connectivity and room heartbeat',
-        ),
-        const SizedBox(height: 12),
-        if (areas.isEmpty)
-          const GlassCard(
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.sensors_off_rounded),
-              title: Text('No scanner-linked rooms'),
-              subtitle: Text('Add rooms to register monitored entry points.'),
-            ),
-          )
-        else
-          for (final area in areas)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _ScannerDeviceTile(area: area),
-            ),
-      ],
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(icon, size: 17),
+      label: Text(label),
     );
   }
 }
 
-class _ScannerDeviceTile extends StatelessWidget {
-  const _ScannerDeviceTile({required this.area});
+class _RoleBadge extends StatelessWidget {
+  const _RoleBadge({required this.role});
 
-  final Area area;
+  final String role;
 
   @override
   Widget build(BuildContext context) {
-    final online = area.active;
-    final healthyCapacity =
-        area.capacity <= 0 || area.currentOccupancy <= area.capacity;
-    final status = online
-        ? healthyCapacity
-              ? 'Online'
-              : 'Capacity Alert'
-        : 'Offline';
-    final color = !online
-        ? Theme.of(context).colorScheme.error
-        : healthyCapacity
-        ? const Color(0xFF32D583)
-        : const Color(0xFFFDB022);
-    return GlassCard(
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(Icons.sensors_rounded, color: color),
-        title: Text(
-          area.name.isEmpty ? 'Entry Point ${area.roomNumber}' : area.name,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-        subtitle: Text(
-          '${area.location} - ${area.floor} - Room ${area.roomNumber}\n'
-          'Last heartbeat: ${online ? 'live' : 'not reporting'}',
-        ),
-        trailing: Chip(
-          visualDensity: VisualDensity.compact,
-          label: Text(status),
-          side: BorderSide(color: color.withValues(alpha: .4)),
-        ),
-        isThreeLine: true,
-      ),
+    final color = role.toLowerCase().contains('staff')
+        ? const Color(0xFF2563EB)
+        : const Color(0xFF0D9488);
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(Icons.shield_rounded, size: 17, color: color),
+      label: Text(role),
+      side: BorderSide(color: color.withValues(alpha: .30)),
+      backgroundColor: color.withValues(alpha: .10),
     );
   }
 }
 
-class _AcademicCycleSyncTab extends StatelessWidget {
-  const _AcademicCycleSyncTab();
+class _FaceEnrollmentChip extends StatelessWidget {
+  const _FaceEnrollmentChip({required this.enrolled});
+
+  final bool enrolled;
 
   @override
   Widget build(BuildContext context) {
-    final system = context.watch<SystemProvider>();
-    final settings = system.settings;
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        const _UserSectionHeader(
-          title: 'Academic Cycle Sync',
-          subtitle: 'Sync semester dates with the User ID hub',
-        ),
-        const SizedBox(height: 12),
-        GlassCard(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.event_rounded),
-                title: const Text('Semester Start'),
-                subtitle: Text(
-                  DateFormat.yMMMd().format(settings.semesterStart),
-                ),
-                onTap: () => _pickDate(
-                  context,
-                  initial: settings.semesterStart,
-                  onPicked: (date) => system.updateAcademicSession(
-                    start: date,
-                    end: settings.semesterEnd,
-                  ),
-                ),
-              ),
-              const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.event_available_rounded),
-                title: const Text('Semester End'),
-                subtitle: Text(DateFormat.yMMMd().format(settings.semesterEnd)),
-                onTap: () => _pickDate(
-                  context,
-                  initial: settings.semesterEnd,
-                  onPicked: (date) => system.updateAcademicSession(
-                    start: settings.semesterStart,
-                    end: date,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+    final color = enrolled ? const Color(0xFF16A34A) : const Color(0xFFF59E0B);
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(Icons.circle, size: 12, color: color),
+      label: Text(enrolled ? 'Face enrolled' : 'Face pending'),
     );
-  }
-
-  Future<void> _pickDate(
-    BuildContext context, {
-    required DateTime initial,
-    required ValueChanged<DateTime> onPicked,
-  }) async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(2025),
-      lastDate: DateTime(2030),
-    );
-    if (picked != null) onPicked(picked);
   }
 }
 
-class _UserShell extends StatelessWidget {
-  const _UserShell({
-    required this.user,
-    required this.index,
-    required this.onIndexChanged,
-  });
+class _UserEditPanel extends StatefulWidget {
+  const _UserEditPanel({required this.user, required this.areas});
 
   final AppUser user;
-  final int index;
-  final ValueChanged<int> onIndexChanged;
+  final List<Area> areas;
 
   @override
-  Widget build(BuildContext context) {
-    final pages = [
-      _PersonalHubTab(
-        user: user,
-        onOpenActivity: () => onIndexChanged(1),
-        onOpenAccess: () => onIndexChanged(2),
-      ),
-      _MyActivityTab(user: user),
-      _AccessPermissionsTab(user: user),
-      _SettingsTab(user: user),
-    ];
-    return AppBackground(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          title: Text('${user.roleLabel} User ID'),
-        ),
-        body: pages[index],
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: index,
-          onDestinationSelected: onIndexChanged,
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.badge_rounded),
-              label: 'Identity',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.history_rounded),
-              label: 'Activity',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.verified_user_rounded),
-              label: 'Access',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_rounded),
-              label: 'Settings',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  State<_UserEditPanel> createState() => _UserEditPanelState();
 }
 
-class _UserRegistrationTab extends StatefulWidget {
-  const _UserRegistrationTab();
-
-  @override
-  State<_UserRegistrationTab> createState() => _UserRegistrationTabState();
-}
-
-class _UserRegistrationTabState extends State<_UserRegistrationTab> {
-  final _firebase = FirebaseService();
+class _UserEditPanelState extends State<_UserEditPanel> {
   final _form = GlobalKey<FormState>();
-  final _name = TextEditingController();
-  final _identityNumber = TextEditingController();
-  final _email = TextEditingController();
-  final _phone = TextEditingController();
-  String _faculty = _campusFaculties.first;
-  String _program = _fsktmHonoursPrograms.first;
-  String _role = 'Student';
-  int _accessLevel = 1;
-  String? _room;
-  AppUser? _editing;
+  late final TextEditingController _name;
+  late final TextEditingController _identity;
+  late final TextEditingController _email;
+  late final TextEditingController _department;
+  late final TextEditingController _phone;
+  late String _position;
+  late String _status;
+  late List<String> _rooms;
   bool _saving = false;
-  bool _sendingSetupEmail = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = widget.user;
+    _name = TextEditingController(text: user.name);
+    _identity = TextEditingController(text: user.identityNumber);
+    _email = TextEditingController(text: user.email);
+    _department = TextEditingController(text: user.department);
+    _phone = TextEditingController(text: user.phone);
+    _position = user.roleLabel.toLowerCase().contains('staff')
+        ? 'Staff'
+        : 'Student';
+    _status = user.status.trim().isEmpty ? 'approved' : user.status;
+    _rooms = [...user.assignedRooms];
+  }
 
   @override
   void dispose() {
     _name.dispose();
-    _identityNumber.dispose();
+    _identity.dispose();
     _email.dispose();
+    _department.dispose();
     _phone.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final areas = context.watch<AreaProvider>().areas;
-    final roomOptions =
-        areas
-            .map(
-              (area) => area.name.trim().isEmpty
-                  ? '${area.floor} - Room ${area.roomNumber}'
-                  : area.name.trim(),
-            )
-            .toSet()
-            .toList()
-          ..sort();
-    final selectedRoom = _room != null && roomOptions.contains(_room)
-        ? _room
-        : (roomOptions.isEmpty ? null : roomOptions.first);
-    if (_room != selectedRoom) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() => _room = selectedRoom);
-      });
-    }
-
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        GlassCard(
-          child: Form(
-            key: _form,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  _editing == null ? 'Register User' : 'Update User',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _name,
-                  decoration: const InputDecoration(labelText: 'Full Name'),
-                  validator: _required,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _identityNumber,
-                  decoration: const InputDecoration(
-                    labelText: 'Matric or Staff ID',
+    final width = MediaQuery.sizeOf(context).width;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Material(
+        color: Theme.of(context).colorScheme.surface,
+        elevation: 12,
+        child: SizedBox(
+          width: math.min(width * .94, 460),
+          height: double.infinity,
+          child: SafeArea(
+            child: Form(
+              key: _form,
+              child: ListView(
+                padding: const EdgeInsets.all(18),
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Edit Identity',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
                   ),
-                  validator: _required,
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _email,
-                  decoration: const InputDecoration(labelText: 'Email'),
-                  keyboardType: TextInputType.emailAddress,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        key: ValueKey('faculty-$_faculty'),
-                        initialValue: _faculty,
-                        isExpanded: true,
-                        decoration: const InputDecoration(labelText: 'Faculty'),
-                        items: _campusFaculties
-                            .map(
-                              (faculty) => DropdownMenuItem(
-                                value: faculty,
-                                child: Text(faculty),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value != null) setState(() => _faculty = value);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        key: ValueKey('program-$_program'),
-                        initialValue: _program,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'FSKTM Honours Program',
-                        ),
-                        items: _fsktmHonoursPrograms
-                            .map(
-                              (program) => DropdownMenuItem(
-                                value: program,
-                                child: Text(
-                                  program,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value != null) setState(() => _program = value);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _phone,
-                  decoration: const InputDecoration(labelText: 'Phone'),
-                  keyboardType: TextInputType.phone,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _role,
-                        decoration: const InputDecoration(labelText: 'Role'),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Student',
-                            child: Text('Student'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Staff',
-                            child: Text('Staff'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Admin',
-                            child: Text('Admin'),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) setState(() => _role = value);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        initialValue: _accessLevel,
-                        decoration: const InputDecoration(
-                          labelText: 'Access Level',
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 1, child: Text('Level 1')),
-                          DropdownMenuItem(value: 2, child: Text('Level 2')),
-                          DropdownMenuItem(value: 3, child: Text('Level 3')),
-                        ],
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => _accessLevel = value);
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                if (selectedRoom == null)
-                  const Text('Add a room before assigning access.')
-                else
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _name,
+                    decoration: const InputDecoration(labelText: 'Full Name'),
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _identity,
+                    decoration: const InputDecoration(labelText: 'Unique ID'),
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _email,
+                    decoration: const InputDecoration(labelText: 'Email'),
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _department,
+                    decoration: const InputDecoration(labelText: 'Department'),
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _phone,
+                    decoration: const InputDecoration(labelText: 'Phone'),
+                  ),
+                  const SizedBox(height: 10),
+                  _PositionToggle(
+                    value: _position,
+                    onChanged: (value) => setState(() => _position = value),
+                  ),
+                  const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
-                    key: ValueKey('managed-room-$selectedRoom'),
-                    initialValue: selectedRoom,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Primary Room',
-                    ),
-                    items: roomOptions
-                        .map(
-                          (room) => DropdownMenuItem(
-                            value: room,
-                            child: Text(
-                              room,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) => setState(() => _room = value),
+                    initialValue: _status,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'approved',
+                        child: Text('Approved'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'pending',
+                        child: Text('Pending'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) setState(() => _status = value);
+                    },
                   ),
-                const SizedBox(height: 18),
-                FilledButton.icon(
-                  onPressed: _saving ? null : _save,
-                  icon: Icon(
-                    _editing == null
-                        ? Icons.person_add_rounded
-                        : Icons.save_rounded,
+                  const SizedBox(height: 10),
+                  _RoomMultiSelectField(
+                    title: 'Manage Access',
+                    options: widget.areas.map(_roomLabel).toList(),
+                    selected: _rooms,
+                    onChanged: (rooms) => setState(() => _rooms = rooms),
                   ),
-                  label: Text(
-                    _saving
-                        ? 'Saving'
-                        : (_editing == null
-                              ? 'Create Profile'
-                              : 'Save Changes'),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _sendingSetupEmail
-                      ? null
-                      : () => _sendSetupEmail(_email.text),
-                  icon: const Icon(Icons.mark_email_read_rounded),
-                  label: Text(
-                    _sendingSetupEmail
-                        ? 'Sending Setup Email'
-                        : 'Send Setup Email',
-                  ),
-                ),
-                if (_editing != null) ...[
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: _saving ? null : _clearForm,
-                    child: const Text('Cancel Editing'),
+                  const SizedBox(height: 18),
+                  FilledButton.icon(
+                    onPressed: _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save_rounded),
+                    label: Text(_saving ? 'Saving' : 'Save Changes'),
                   ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
-        const SizedBox(height: 16),
-        StreamBuilder<List<AppUser>>(
-          stream: _firebase.watchAllUsers(),
-          builder: (context, snapshot) {
-            final users = snapshot.data ?? const <AppUser>[];
-            if (snapshot.connectionState == ConnectionState.waiting &&
-                users.isEmpty) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            return Column(
-              children: [
-                for (final user in users)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: GlassCard(
-                      padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
-                      child: ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: CircleAvatar(
-                          child: Icon(
-                            user.hasFace
-                                ? Icons.face_rounded
-                                : Icons.person_rounded,
-                          ),
-                        ),
-                        title: Text(
-                          user.name.isEmpty ? 'Unnamed profile' : user.name,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        subtitle: Text(
-                          '${user.identityNumber.isEmpty ? user.id : user.identityNumber} - ${user.roleLabel} - Level ${user.accessLevel}\n${user.room}',
-                        ),
-                        isThreeLine: true,
-                        trailing: PopupMenuButton<String>(
-                          onSelected: (value) => _handleUserAction(value, user),
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'edit', child: Text('Edit')),
-                            PopupMenuItem(
-                              value: 'face',
-                              child: Text('Capture Face'),
-                            ),
-                            PopupMenuItem(
-                              value: 'setup',
-                              child: Text('Send Setup Email'),
-                            ),
-                            PopupMenuItem(
-                              value: 'delete',
-                              child: Text('Delete'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            );
-          },
-        ),
-      ],
+      ),
     );
   }
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
-    final messenger = ScaffoldMessenger.of(context);
     setState(() => _saving = true);
+    final updated = widget.user.copyWith(
+      name: _name.text.trim(),
+      identityNumber: _identity.text.trim(),
+      email: _email.text.trim(),
+      department: _department.text.trim(),
+      phone: _phone.text.trim(),
+      room: _rooms.isEmpty ? '' : _rooms.first,
+      rooms: _rooms,
+      role: 'User',
+      position: _position,
+      status: _status,
+    );
     try {
-      final room = _room?.trim() ?? '';
-      final editing = _editing;
-      if (editing == null) {
-        final created = await _firebase.createManagedUser(
-          name: _name.text,
-          identityNumber: _identityNumber.text,
-          email: _email.text,
-          department: _program,
-          phone: _phone.text,
-          room: room,
-          role: _role,
-          accessLevel: _accessLevel,
-          course: _program,
-          faculty: _faculty,
-        );
-        if (created.email.trim().isNotEmpty) {
-          await _firebase.sendSetupEmail(created.email, user: created);
-        }
-      } else {
-        await _firebase.updateUserProfile(
-          editing.copyWith(
-            name: _name.text,
-            identityNumber: _identityNumber.text,
-            email: _email.text,
-            department: _program,
-            course: _program,
-            faculty: _faculty,
-            phone: _phone.text,
-            room: room,
-            role: _role,
-            accessLevel: _accessLevel,
-          ),
-        );
-      }
+      await context.read<FirebaseService>().updateUserProfile(updated);
       if (!mounted) return;
-      _clearForm();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            editing == null
-                ? 'User saved and setup email opened.'
-                : 'User saved.',
-          ),
-        ),
-      );
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Identity updated.')));
     } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Unable to save user: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  void _handleUserAction(String value, AppUser user) {
-    if (value == 'edit') {
-      setState(() {
-        _editing = user;
-        _name.text = user.name;
-        _identityNumber.text = user.identityNumber;
-        _email.text = user.email;
-        _faculty = _selectedFaculty(user.faculty);
-        _program = _selectedProgram(
-          user.course.trim().isEmpty ? user.department : user.course,
+  static String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
+}
+
+class _ZoneControlTab extends StatefulWidget {
+  const _ZoneControlTab({required this.onOpenTimeline});
+
+  final void Function({int limit}) onOpenTimeline;
+
+  @override
+  State<_ZoneControlTab> createState() => _ZoneControlTabState();
+}
+
+class _ZoneControlTabState extends State<_ZoneControlTab> {
+  _ZoneFilter _filter = _ZoneFilter.activeRooms;
+  String? _expandedAreaId;
+  _RoomDetailView _detailView = _RoomDetailView.settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final areaProvider = context.watch<AreaProvider>();
+    final logs = context.watch<LogProvider>().logs;
+    final firebase = context.read<FirebaseService>();
+    return StreamBuilder<List<AppUser>>(
+      stream: firebase.watchAllUsers(),
+      builder: (context, snapshot) {
+        final users = snapshot.data ?? const <AppUser>[];
+        final rooms = _sortedRooms(areaProvider.areas, logs);
+        final activeRooms = areaProvider.areas
+            .where((area) => area.active)
+            .length;
+        final capacity = areaProvider.areas.fold<int>(
+          0,
+          (sum, area) => sum + area.capacity,
         );
-        _phone.text = user.phone;
-        _role = user.isAdmin ? 'Admin' : user.roleLabel;
-        _accessLevel = user.accessLevel.clamp(1, 3);
-        _room = user.room;
-      });
-      return;
-    }
-    if (value == 'face') {
-      _pushNamedAfterFrame(
-        context,
-        FaceRegistrationScreen.route,
-        arguments: FaceRegistrationArgs(user: user),
-      );
-      return;
-    }
-    if (value == 'setup') {
-      _sendSetupEmail(user.email, user: user);
-      return;
-    }
-    _confirmDelete(user);
+        final used = areaProvider.areas.fold<int>(
+          0,
+          (sum, area) => sum + area.currentOccupancy,
+        );
+        return RefreshIndicator(
+          onRefresh: areaProvider.refresh,
+          child: ListView(
+            padding: const EdgeInsets.all(18),
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final wide = constraints.maxWidth > 760;
+                  return GridView.count(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisCount: wide ? 3 : 1,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                    childAspectRatio: wide ? 2.8 : 4.4,
+                    children: [
+                      _ZoneMetricToggle(
+                        selected: _filter == _ZoneFilter.activeRooms,
+                        icon: Icons.meeting_room_rounded,
+                        label: 'Active Rooms',
+                        value: '$activeRooms',
+                        onTap: () =>
+                            setState(() => _filter = _ZoneFilter.activeRooms),
+                      ),
+                      _ZoneMetricToggle(
+                        selected: _filter == _ZoneFilter.capacityUsed,
+                        icon: Icons.speed_rounded,
+                        label: 'Capacity Used',
+                        value: capacity == 0
+                            ? '0%'
+                            : '${((used / capacity) * 100).round()}%',
+                        onTap: () =>
+                            setState(() => _filter = _ZoneFilter.capacityUsed),
+                      ),
+                      _ZoneMetricToggle(
+                        selected: _filter == _ZoneFilter.liveLogs,
+                        icon: Icons.terminal_rounded,
+                        label: 'Live Logs',
+                        value: '${logs.length}',
+                        onTap: () {
+                          setState(() => _filter = _ZoneFilter.liveLogs);
+                          widget.onOpenTimeline(limit: 30);
+                        },
+                      ),
+                    ],
+                  );
+                },
+              ),
+              if (areaProvider.error != null) ...[
+                const SizedBox(height: 12),
+                _InlineError(message: areaProvider.error!),
+              ],
+              const SizedBox(height: 12),
+              if (rooms.isEmpty)
+                const _EmptyState(
+                  icon: Icons.meeting_room_rounded,
+                  title: 'No linked rooms available',
+                )
+              else
+                for (final room in rooms)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _RoomAssetCard(
+                      area: room,
+                      logs: logs,
+                      users: users,
+                      expanded: _expandedAreaId == room.id,
+                      detailView: _detailView,
+                      onToggle: () {
+                        setState(() {
+                          _expandedAreaId = _expandedAreaId == room.id
+                              ? null
+                              : room.id;
+                          _detailView = _RoomDetailView.settings;
+                        });
+                      },
+                      onDetailViewChanged: (view) =>
+                          setState(() => _detailView = view),
+                      onExport: () => _exportRoom(context, room, logs),
+                      onEdit: () => _openRoomEditor(context, room),
+                      onDelete: () => _deleteRoom(context, room),
+                    ),
+                  ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
-  Future<void> _sendSetupEmail(String email, {AppUser? user}) async {
-    final target = email.trim();
-    final messenger = ScaffoldMessenger.of(context);
-    if (target.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Enter an email before sending setup.')),
-      );
-      return;
+  List<Area> _sortedRooms(List<Area> areas, List<AccessLog> logs) {
+    final rooms = [...areas];
+    switch (_filter) {
+      case _ZoneFilter.activeRooms:
+        rooms.sort((a, b) {
+          final active = b.active.toString().compareTo(a.active.toString());
+          return active == 0 ? a.name.compareTo(b.name) : active;
+        });
+      case _ZoneFilter.capacityUsed:
+        rooms.sort((a, b) {
+          final left = a.capacity <= 0 ? 0 : a.currentOccupancy / a.capacity;
+          final right = b.capacity <= 0 ? 0 : b.currentOccupancy / b.capacity;
+          return right.compareTo(left);
+        });
+      case _ZoneFilter.liveLogs:
+        rooms.sort((a, b) {
+          final left = _latestRoomLogTime(a, logs);
+          final right = _latestRoomLogTime(b, logs);
+          return right.compareTo(left);
+        });
     }
-    setState(() => _sendingSetupEmail = true);
-    try {
-      await _firebase.sendSetupEmail(target, user: user ?? _editing);
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Setup email opened for $target.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Unable to send setup email: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _sendingSetupEmail = false);
-    }
+    return rooms;
   }
 
-  Future<void> _confirmDelete(AppUser user) async {
+  Future<void> _exportRoom(
+    BuildContext context,
+    Area area,
+    List<AccessLog> logs,
+  ) async {
+    final roomLogs = logs.where((log) => _logBelongsToArea(log, area)).toList();
+    final file = await SecurityReportService().writeCsvReport(roomLogs);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Room export saved: ${file.path}')));
+  }
+
+  Future<void> _deleteRoom(BuildContext context, Area area) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete User'),
-        content: Text('Remove ${user.name.isEmpty ? 'this user' : user.name}?'),
+        title: const Text('Delete room'),
+        content: Text('Delete ${_roomLabel(area)}?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1313,1289 +1721,60 @@ class _UserRegistrationTabState extends State<_UserRegistrationTab> {
         ],
       ),
     );
-    if (confirmed != true) return;
-    await _firebase.deleteManagedUser(user.id);
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('User removed.')));
+    if (confirmed != true || !context.mounted) return;
+    await context.read<AreaProvider>().deleteArea(area.id);
   }
 
-  void _clearForm() {
-    _form.currentState?.reset();
-    setState(() {
-      _editing = null;
-      _name.clear();
-      _identityNumber.clear();
-      _email.clear();
-      _phone.clear();
-      _faculty = _campusFaculties.first;
-      _program = _fsktmHonoursPrograms.first;
-      _role = 'Student';
-      _accessLevel = 1;
-    });
-  }
-
-  static String? _required(String? value) =>
-      value == null || value.trim().isEmpty ? 'Required' : null;
-
-  String _selectedFaculty(String value) {
-    return _campusFaculties.contains(value) ? value : _campusFaculties.first;
-  }
-
-  String _selectedProgram(String value) {
-    return _fsktmHonoursPrograms.contains(value)
-        ? value
-        : _fsktmHonoursPrograms.first;
+  void _openRoomEditor(BuildContext context, Area area) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _RoomEditSheet(area: area),
+    );
   }
 }
 
-class _PersonalHubTab extends StatelessWidget {
-  const _PersonalHubTab({
-    required this.user,
-    required this.onOpenActivity,
-    required this.onOpenAccess,
+class _ZoneMetricToggle extends StatelessWidget {
+  const _ZoneMetricToggle({
+    required this.selected,
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onTap,
   });
 
-  final AppUser user;
-  final VoidCallback onOpenActivity;
-  final VoidCallback onOpenAccess;
-
-  @override
-  Widget build(BuildContext context) {
-    final assignedRoom = user.room.trim().isEmpty ? 'Not assigned' : user.room;
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        _StudentPassportHeader(user: user),
-        const SizedBox(height: 14),
-        _UserCredentialCard(user: user, assignedRoom: assignedRoom),
-        const SizedBox(height: 16),
-        const _AcademicCalendarStrip(),
-        const SizedBox(height: 16),
-        const _CampusNewsFeed(),
-        const SizedBox(height: 16),
-        Text(
-          'Credentialing Services',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 10),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 1.7,
-          children: [
-            _QuickActionTile(
-              icon: Icons.history_rounded,
-              label: 'Access History',
-              onTap: onOpenActivity,
-            ),
-            _QuickActionTile(
-              icon: Icons.verified_user_rounded,
-              label: 'My Rooms',
-              onTap: onOpenAccess,
-            ),
-            _QuickActionTile(
-              icon: Icons.face_retouching_natural_rounded,
-              label: 'Re-enroll Face',
-              onTap: () =>
-                  _pushNamedAfterFrame(context, FaceRegistrationScreen.route),
-            ),
-            _QuickActionTile(
-              icon: Icons.edit_rounded,
-              label: 'Edit Profile',
-              onTap: () =>
-                  _pushNamedAfterFrame(context, EditProfileScreen.route),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _UserCredentialCard extends StatelessWidget {
-  const _UserCredentialCard({required this.user, required this.assignedRoom});
-
-  final AppUser user;
-  final String assignedRoom;
-
-  @override
-  Widget build(BuildContext context) {
-    final matric = user.identityNumber.trim().isEmpty
-        ? user.id
-        : user.identityNumber.trim();
-    final course = user.course.trim().isEmpty ? user.department : user.course;
-    final semester = user.currentSemester.trim().isEmpty
-        ? 'Semester ${user.accessLevel}'
-        : user.currentSemester;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: Stack(
-        children: [
-          const Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFFE0F2FE),
-                    Color(0xFF99F6E4),
-                    Color(0xFF0D9488),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            right: -38,
-            top: -30,
-            child: Container(
-              width: 150,
-              height: 150,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: .22),
-              ),
-            ),
-          ),
-          BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: .28),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white.withValues(alpha: .62)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(3),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: .82),
-                            width: 2,
-                          ),
-                        ),
-                        child: _FaceAvatar(user: user),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${user.roleLabel} User ID',
-                              style: Theme.of(context).textTheme.labelLarge
-                                  ?.copyWith(
-                                    color: const Color(0xFF0F766E),
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              user.name.isEmpty ? user.roleLabel : user.name,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.headlineSmall
-                                  ?.copyWith(
-                                    color: const Color(0xFF0F172A),
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    user.roleLabel == 'Staff' ? 'Staff ID' : 'Student ID',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: const Color(0xFF0F766E),
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  SelectableText(
-                    matric,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      color: const Color(0xFF0F172A),
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  _IdentityDetail(label: 'Course', value: course),
-                  _IdentityDetail(
-                    label: 'Faculty',
-                    value: user.faculty.trim().isEmpty ? 'FSKTM' : user.faculty,
-                  ),
-                  _IdentityDetail(label: 'Current Semester', value: semester),
-                  _IdentityDetail(label: 'Official Email', value: user.email),
-                  _IdentityDetail(label: 'Assigned Room', value: assignedRoom),
-                  const SizedBox(height: 14),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      _StatusBadge(
-                        icon: Icons.shield_rounded,
-                        label: user.hasFace
-                            ? 'Face Identity: Verified'
-                            : 'Face Identity: Pending',
-                        color: user.hasFace
-                            ? const Color(0xFF0D9488)
-                            : Theme.of(context).colorScheme.error,
-                      ),
-                      _StatusBadge(
-                        icon: Icons.school_rounded,
-                        label: 'Level ${user.accessLevel}',
-                        color: const Color(0xFF0284C7),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _IdentityDetail extends StatelessWidget {
-  const _IdentityDetail({required this.label, required this.value});
-
+  final bool selected;
+  final IconData icon;
   final String label;
   final String value;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+    final color = selected
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).colorScheme.onSurfaceVariant;
+    return GlassCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(14),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            width: 118,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: const Color(0xFF0F766E),
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
+          Icon(icon, color: color),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
-              value.trim().isEmpty ? 'Not provided' : value,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: const Color(0xFF0F172A),
-                fontWeight: FontWeight.w800,
-              ),
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StudentPassportHeader extends StatelessWidget {
-  const _StudentPassportHeader({required this.user});
-
-  final AppUser user;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-      child: StreamBuilder<DateTime>(
-        stream: Stream.periodic(
-          const Duration(seconds: 1),
-          (_) => DateTime.now(),
-        ),
-        initialData: DateTime.now(),
-        builder: (context, snapshot) {
-          final now = snapshot.data ?? DateTime.now();
-          return Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Hello, ${user.name.isEmpty ? 'Student' : user.name}!',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w900),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Welcome to your UTHM campus identity portal.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    DateFormat.Hm().format(now),
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  Text(
-                    DateFormat('EEEE, d MMMM yyyy').format(now),
-                    textAlign: TextAlign.end,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _AcademicCalendarStrip extends StatelessWidget {
-  const _AcademicCalendarStrip();
-
-  @override
-  Widget build(BuildContext context) {
-    final settings = context.watch<SystemProvider>().settings;
-    final start = settings.semesterStart;
-    final end = settings.semesterEnd;
-    final items = [
-      (DateFormat('d MMM').format(start), 'Semester Begins', 'Academic Office'),
-      (
-        DateFormat('d MMM').format(start.add(const Duration(days: 14))),
-        'Add/Drop Deadline',
-        'Programme Units',
-      ),
-      (
-        DateFormat(
-          'd MMM',
-        ).format(start.add(Duration(days: end.difference(start).inDays ~/ 2))),
-        'Mid-Semester Review',
-        'Faculty Office',
-      ),
-      (DateFormat('d MMM').format(end), 'Semester Ends', 'Academic Office'),
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Academic Calendar',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 118,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: items.length,
-            separatorBuilder: (context, index) => const SizedBox(width: 10),
-            itemBuilder: (context, index) {
-              final item = items[index];
-              return SizedBox(
-                width: 210,
-                child: GlassCard(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.$1,
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        item.$2,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      const Spacer(),
-                      Text(
-                        item.$3,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _CampusNewsFeed extends StatelessWidget {
-  const _CampusNewsFeed();
-
-  static const _items = [
-    (
-      Icons.campaign_rounded,
-      'Campus News',
-      'Authorized identity checks are active at all FSKTM restricted rooms.',
-    ),
-    (
-      Icons.verified_user_rounded,
-      'Security Advisory',
-      'Keep your User ID profile current before room access scans.',
-    ),
-    (
-      Icons.school_rounded,
-      'Academic Notice',
-      'Honours programme consultation slots open this week at the faculty office.',
-    ),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Campus News',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 10),
-        for (final item in _items)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: GlassCard(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(item.$1),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.$2,
-                          style: const TextStyle(fontWeight: FontWeight.w900),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(item.$3),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _StatusBadge extends StatelessWidget {
-  const _StatusBadge({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Chip(
-      avatar: Icon(icon, color: color, size: 18),
-      label: Text(label),
-      side: BorderSide(color: color.withValues(alpha: .45)),
-    );
-  }
-}
-
-class _QuickActionTile extends StatelessWidget {
-  const _QuickActionTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return FilledButton.tonalIcon(
-      onPressed: onTap,
-      icon: Icon(icon),
-      label: Text(label, textAlign: TextAlign.center),
-    );
-  }
-}
-
-class _MyActivityTab extends StatelessWidget {
-  const _MyActivityTab({required this.user});
-
-  final AppUser user;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<List<AccessLog>>(
-      stream: FirebaseService().watchUserLogs(user.id),
-      builder: (context, snapshot) {
-        final logs = snapshot.data ?? const <AccessLog>[];
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            logs.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (logs.isEmpty) {
-          return ListView(
-            padding: const EdgeInsets.all(18),
-            children: const [
-              _UserSectionHeader(
-                title: 'Personal Access History',
-                subtitle: 'Your private campus entry record',
-              ),
-              SizedBox(height: 120),
-              Center(child: Text('No activity yet.')),
-            ],
-          );
-        }
-        return ListView(
-          padding: const EdgeInsets.all(18),
-          children: [
-            const _UserSectionHeader(
-              title: 'Personal Access History',
-              subtitle: 'Your private campus entry record',
-            ),
-            const SizedBox(height: 12),
-            for (final log in logs)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _LogCard(
-                  log: log,
-                  onSnapshot: () {},
-                  showSnapshotAction: false,
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _UserSectionHeader extends StatelessWidget {
-  const _UserSectionHeader({required this.title, required this.subtitle});
-
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: Theme.of(
-            context,
-          ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          subtitle,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _AccessPermissionsTab extends StatelessWidget {
-  const _AccessPermissionsTab({required this.user});
-
-  final AppUser user;
-
-  @override
-  Widget build(BuildContext context) {
-    final areas = context.watch<AreaProvider>().areas;
-    final allowed = areas.where(user.canAccessArea).toList();
-    final denied = areas.where((area) => !user.canAccessArea(area)).toList();
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        GlassCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Current Access',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 8),
-              Text('Role: ${user.role}'),
-              Text('Access level: ${user.accessLevel}'),
-              Text(
-                'Primary room: ${user.room.isEmpty ? 'Not assigned' : user.room}',
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          'Allowed Rooms',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 8),
-        if (allowed.isEmpty)
-          const Text('No room access is currently assigned.')
-        else
-          for (final area in allowed)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _AreaPermissionTile(area: area, allowed: true),
-            ),
-        const SizedBox(height: 8),
-        Text(
-          'View Only',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 8),
-        for (final area in denied)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _AreaPermissionTile(area: area, allowed: false),
-          ),
-      ],
-    );
-  }
-}
-
-class _AreaPermissionTile extends StatelessWidget {
-  const _AreaPermissionTile({required this.area, required this.allowed});
-
-  final Area area;
-  final bool allowed;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(
-          allowed ? Icons.check_circle_rounded : Icons.lock_rounded,
-          color: allowed ? const Color(0xFF32D583) : null,
-        ),
-        title: Text(
-          area.name,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-        subtitle: Text(
-          '${area.location} - ${area.floor} - Room ${area.roomNumber}',
-        ),
-      ),
-    );
-  }
-}
-
-class _HomeTab extends StatelessWidget {
-  const _HomeTab({required this.user, required this.onOpenRoomControl});
-
-  final AppUser user;
-  final VoidCallback onOpenRoomControl;
-
-  @override
-  Widget build(BuildContext context) {
-    final logs = context.watch<LogProvider>().logs;
-    final logProvider = context.watch<LogProvider>();
-    final system = context.watch<SystemProvider>();
-    final areas = context.watch<AreaProvider>().areas;
-    final occupied = areas.fold<int>(
-      0,
-      (sum, area) => sum + area.currentOccupancy,
-    );
-    final capacity = areas.fold<int>(0, (sum, area) => sum + area.capacity);
-
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        _ConsoleHeader(
-          name: user.name.isEmpty ? 'Administrator' : user.name,
-          lockdown: system.settings.globalLockdown,
-          syncing: logProvider.syncing,
-          pending: logProvider.pendingCount,
-          onSync: logProvider.syncPending,
-          onLockdownChanged: system.toggleLockdown,
-          onEmergencySos: system.activateEmergencyLockdown,
-        ),
-        const SizedBox(height: 12),
-        GlassCard(
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.rule_folder_rounded),
-            title: const Text('Control'),
-            subtitle: const Text(
-              'Review room infrastructure and live access policy.',
-            ),
-            trailing: const Icon(Icons.arrow_forward_rounded),
-            onTap: onOpenRoomControl,
-          ),
-        ),
-        const SizedBox(height: 16),
-        StreamBuilder<List<AppUser>>(
-          stream: FirebaseService().watchAllUsers(),
-          builder: (context, usersSnapshot) {
-            final users = usersSnapshot.data ?? const <AppUser>[];
-            return FutureBuilder<Map<String, int>>(
-              future: FirebaseService().dashboardStats(),
-              builder: (context, snapshot) {
-                final stats = snapshot.data ?? {};
-                final todayLogs = logs
-                    .where((log) => _sameDay(log.timestamp, DateTime.now()))
-                    .toList();
-                final activeLogs = todayLogs
-                    .where((log) => log.granted)
-                    .toList();
-                final deniedLogs = todayLogs
-                    .where((log) => !log.granted)
-                    .toList();
-                final items = [
-                  _AnalyticsTileData(
-                    label: 'Active Today',
-                    value: stats['activeToday'] ?? activeLogs.length,
-                    icon: Icons.verified_rounded,
-                    color: const Color(0xFF0D9488),
-                    onTap: () => _showLogOverlay(
-                      context,
-                      title: 'Active Today',
-                      logs: activeLogs,
-                      emptyText: 'No successful room access today.',
-                    ),
-                  ),
-                  _AnalyticsTileData(
-                    label: 'Denied Access',
-                    value: stats['deniedAccess'] ?? deniedLogs.length,
-                    icon: Icons.block_rounded,
-                    color: const Color(0xFFE11D48),
-                    onTap: () => _showLogOverlay(
-                      context,
-                      title: 'Denied Access',
-                      logs: deniedLogs,
-                      emptyText: 'No denied room access today.',
-                    ),
-                  ),
-                  _AnalyticsTileData(
-                    label: 'User Registry',
-                    value: stats['usersRegistered'] ?? users.length,
-                    icon: Icons.group_rounded,
-                    color: const Color(0xFF0284C7),
-                    onTap: () => _showUserRegistryOverlay(context, users),
-                  ),
-                  _AnalyticsTileData(
-                    label: 'Room Occupancy',
-                    value: occupied,
-                    icon: Icons.people_alt_rounded,
-                    color: const Color(0xFFF59E0B),
-                    onTap: () => _showRoomOverlay(context, areas),
-                  ),
-                ];
-                return GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: items.length,
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 12,
-                    childAspectRatio: 1.25,
-                  ),
-                  itemBuilder: (_, i) => _AnalyticsTile(data: items[i]),
-                );
-              },
-            );
-          },
-        ),
-        const SizedBox(height: 18),
-        GlassCard(
-          child: SizedBox(
-            height: 220,
-            child: BarChart(
-              BarChartData(
-                minY: 0,
-                maxY: 50,
-                borderData: FlBorderData(show: false),
-                gridData: const FlGridData(show: true, horizontalInterval: 10),
-                titlesData: FlTitlesData(
-                  topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 36,
-                      interval: 10,
-                      getTitlesWidget: (value, _) =>
-                          Text(value.toInt().toString()),
-                    ),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (v, _) => Text(
-                        ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'][v.toInt().clamp(
-                          0,
-                          4,
-                        )],
-                      ),
-                    ),
-                  ),
-                ),
-                barGroups: List.generate(5, (i) {
-                  final day = _workWeekStart().add(Duration(days: i));
-                  final count = logs
-                      .where((l) => _sameDay(l.timestamp, day))
-                      .length;
-                  return BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: count.clamp(0, 50).toDouble(),
-                        color: _barColors[i],
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ],
-                  );
-                }),
-              ),
-            ),
-          ),
-        ),
-        if (capacity > 0) ...[
-          const SizedBox(height: 12),
-          LinearProgressIndicator(
-            value: (occupied / capacity).clamp(0, 1),
-            minHeight: 8,
-          ),
-          const SizedBox(height: 6),
-          Text('Real-time occupancy: $occupied / $capacity'),
-        ],
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton(
-                onPressed: () =>
-                    _pushNamedAfterFrame(context, AddAreaScreen.route),
-                child: const Text('Add Room'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.tonal(
-                onPressed: () => _exportUserData(context),
-                child: const Text('Export Clean CSV'),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonal(
-          onPressed: () => _writeReport(context, logs),
-          child: const Text('Export Security Report'),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonal(
-          onPressed: () => _pushNamedAfterFrame(context, FaceLoginScreen.route),
-          child: const Text('Run Face Identity Scan'),
-        ),
-      ],
-    );
-  }
-
-  void _showLogOverlay(
-    BuildContext context, {
-    required String title,
-    required List<AccessLog> logs,
-    required String emptyText,
-  }) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => _AnalyticsDrilldownSheet(
-        title: title,
-        child: logs.isEmpty
-            ? Center(child: Text(emptyText))
-            : ListView.builder(
-                itemCount: logs.length,
-                itemBuilder: (context, index) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _LogCard(
-                    log: logs[index],
-                    onSnapshot: () {
-                      final path = logs[index].snapshotPath;
-                      if (path != null) _showLogSnapshot(context, path);
-                    },
-                  ),
-                ),
-              ),
-      ),
-    );
-  }
-
-  void _showUserRegistryOverlay(BuildContext context, List<AppUser> users) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => _AnalyticsDrilldownSheet(
-        title: 'User Registry',
-        child: users.isEmpty
-            ? const Center(child: Text('No registered users yet.'))
-            : ListView.builder(
-                itemCount: users.length,
-                itemBuilder: (context, index) {
-                  final user = users[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: GlassCard(
-                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                      child: ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Icon(
-                          user.hasFace
-                              ? Icons.verified_user_rounded
-                              : Icons.person_search_rounded,
-                        ),
-                        title: Text(
-                          user.name.isEmpty ? 'Unnamed profile' : user.name,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        subtitle: Text(
-                          '${user.identityNumber.isEmpty ? user.id : user.identityNumber} - ${user.roleLabel}\n'
-                          '${user.room.isEmpty ? 'No room assigned' : user.room}',
-                        ),
-                        isThreeLine: true,
-                      ),
-                    ),
-                  );
-                },
-              ),
-      ),
-    );
-  }
-
-  void _showRoomOverlay(BuildContext context, List<Area> areas) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => _AnalyticsDrilldownSheet(
-        title: 'Room Occupancy',
-        child: areas.isEmpty
-            ? const Center(child: Text('No rooms configured yet.'))
-            : ListView.builder(
-                itemCount: areas.length,
-                itemBuilder: (context, index) {
-                  final area = areas[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _AreaPermissionTile(
-                      area: area,
-                      allowed: area.active,
-                    ),
-                  );
-                },
-              ),
-      ),
-    );
-  }
-
-  DateTime _workWeekStart() {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    return today.subtract(Duration(days: today.weekday - DateTime.monday));
-  }
-
-  bool _sameDay(DateTime left, DateTime right) =>
-      left.year == right.year &&
-      left.month == right.month &&
-      left.day == right.day;
-
-  Future<void> _writeReport(BuildContext context, List<AccessLog> logs) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final file = await SecurityReportService().writeCsvReport(logs);
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Security report ready to share.')),
-      );
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          subject: 'Campus Access Security Report',
-          text: 'Campus access security report',
-        ),
-      );
-      if (!context.mounted) return;
-      await showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        builder: (_) => _ReportSummary(logs: logs),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Unable to export security report: $e')),
-      );
-    }
-  }
-
-  Future<void> _exportUserData(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final users = await FirebaseService().getAllUsers();
-      final file = await UserDataExportService().writeCsv(users);
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Clean user export is ready to share.')),
-      );
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          subject: 'Campus Access User Data Export',
-          text: 'Campus access user data export',
-        ),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Unable to export user data: $e')),
-      );
-    }
-  }
-
-  static const _barColors = [
-    Color(0xFF5B8DEF),
-    Color(0xFF00B894),
-    Color(0xFFFDCB6E),
-    Color(0xFFE17055),
-    Color(0xFFA29BFE),
-  ];
-}
-
-class _AnalyticsTileData {
-  const _AnalyticsTileData({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    required this.onTap,
-  });
-
-  final String label;
-  final int value;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-}
-
-class _AnalyticsTile extends StatelessWidget {
-  const _AnalyticsTile({required this.data});
-
-  final _AnalyticsTileData data;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      onTap: data.onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(data.icon, color: data.color),
-          const Spacer(),
           Text(
-            '${data.value}',
-            style: Theme.of(
-              context,
-            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
-          ),
-          Text(data.label),
-        ],
-      ),
-    );
-  }
-}
-
-class _AnalyticsDrilldownSheet extends StatelessWidget {
-  const _AnalyticsDrilldownSheet({required this.title, required this.child});
-
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: MediaQuery.sizeOf(context).height * .72,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 12),
-            Expanded(child: child),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConsoleHeader extends StatelessWidget {
-  const _ConsoleHeader({
-    required this.name,
-    required this.lockdown,
-    required this.syncing,
-    required this.pending,
-    required this.onSync,
-    required this.onLockdownChanged,
-    required this.onEmergencySos,
-  });
-
-  final String name;
-  final bool lockdown;
-  final bool syncing;
-  final int pending;
-  final VoidCallback onSync;
-  final ValueChanged<bool> onLockdownChanged;
-  final Future<void> Function() onEmergencySos;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Welcome Admin',
-            style: Theme.of(
-              context,
-            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            name,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: const Color(0xFF0D9488),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 6),
-          StreamBuilder<DateTime>(
-            stream: Stream.periodic(
-              const Duration(seconds: 1),
-              (_) => DateTime.now(),
-            ),
-            initialData: DateTime.now(),
-            builder: (context, snapshot) {
-              final now = snapshot.data ?? DateTime.now();
-              return Text(
-                '${DateFormat('EEEE, MMMM d, yyyy').format(now)} - ${DateFormat.jm().format(now)}',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFE11D48),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-              onPressed: onEmergencySos,
-              child: const Text(
-                'ACTIVATE ACCESS HOLD',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _StatusChip(
-                  icon: lockdown
-                      ? Icons.lock_rounded
-                      : Icons.verified_user_rounded,
-                  label: Text(lockdown ? 'Access: Lockdown' : 'Access: Normal'),
-                  color: lockdown
-                      ? const Color(0xFFFF5B66)
-                      : const Color(0xFF32D583),
-                  onTap: () => onLockdownChanged(!lockdown),
-                ),
-                const SizedBox(width: 8),
-                _StatusChip(
-                  icon: pending > 0
-                      ? Icons.cloud_upload_rounded
-                      : Icons.cloud_done_rounded,
-                  label: _SyncLabel(syncing: syncing, pending: pending),
-                  color: pending > 0
-                      ? const Color(0xFFFDB022)
-                      : const Color(0xFF22D3EE),
-                  onTap: syncing ? null : onSync,
-                ),
-              ],
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
             ),
           ),
         ],
@@ -2604,1495 +1783,1489 @@ class _ConsoleHeader extends StatelessWidget {
   }
 }
 
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({
-    required this.icon,
-    required this.label,
-    required this.color,
-    this.onTap,
-  });
-
-  final IconData icon;
-  final Widget label;
-  final Color color;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      avatar: Icon(icon, color: color, size: 18),
-      label: label,
-      onPressed: onTap,
-      side: BorderSide(color: color.withValues(alpha: .34)),
-      backgroundColor: color.withValues(alpha: .12),
-      labelStyle: Theme.of(
-        context,
-      ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
-    );
-  }
-}
-
-class _SyncLabel extends StatelessWidget {
-  const _SyncLabel({required this.syncing, required this.pending});
-
-  final bool syncing;
-  final int pending;
-
-  @override
-  Widget build(BuildContext context) {
-    if (pending > 0) return Text('$pending offline logs');
-    if (syncing) return const Text('Syncing');
-    final base = Theme.of(context).textTheme.labelLarge ?? const TextStyle();
-    return Shimmer.fromColors(
-      baseColor: base.color ?? Theme.of(context).colorScheme.onSurfaceVariant,
-      highlightColor: Theme.of(
-        context,
-      ).colorScheme.primary.withValues(alpha: .42),
-      period: const Duration(milliseconds: 1600),
-      child: Text('Synced', style: base),
-    );
-  }
-}
-
-class _ReportSummary extends StatelessWidget {
-  const _ReportSummary({required this.logs});
-
-  final List<AccessLog> logs;
-
-  @override
-  Widget build(BuildContext context) {
-    final denied = logs.where((log) => !log.granted).length;
-    final unknown = logs.where((log) => log.isUnknownFace).length;
-    final granted = logs.where((log) => log.granted).length;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Security Report',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              Chip(label: Text('Total ${logs.length}')),
-              Chip(label: Text('Granted $granted')),
-              Chip(label: Text('Denied $denied')),
-              Chip(label: Text('Unknown $unknown')),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-const _roomStatusColor = Color(0xFF0D9488);
-const _roomOtherValue = 'Other...';
-const _roomFloors = ['Level 1', 'Level 2', 'Level 3'];
-const _roomNumbers = ['31', '32', '33', '34', '35', '36'];
-
-class _RoomControlCenterTab extends StatelessWidget {
-  const _RoomControlCenterTab();
-
-  @override
-  Widget build(BuildContext context) {
-    final areaProvider = context.watch<AreaProvider>();
-    final logProvider = context.watch<LogProvider>();
-    final logs = logProvider.logs.take(8).toList();
-    final allLogs = logProvider.logs;
-    return StreamBuilder<List<AppUser>>(
-      stream: FirebaseService().watchAllUsers(),
-      builder: (context, snapshot) {
-        final users = snapshot.data ?? const <AppUser>[];
-        return Scaffold(
-          backgroundColor: Colors.transparent,
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _pushNamedAfterFrame(context, AddAreaScreen.route),
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Add Room'),
-          ),
-          body: RefreshIndicator(
-            onRefresh: areaProvider.refresh,
-            child: ListView(
-              padding: const EdgeInsets.all(18),
-              children: [
-                const _UserSectionHeader(
-                  title: 'Room Control Center',
-                  subtitle:
-                      'Room parameters and access intelligence in one view',
-                ),
-                const SizedBox(height: 12),
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisSpacing: 10,
-                  mainAxisSpacing: 10,
-                  childAspectRatio: 1.55,
-                  children: [
-                    _ArchiveMetric(
-                      label: 'Active Rooms',
-                      value:
-                          '${areaProvider.areas.where((area) => area.active).length}',
-                    ),
-                    _ArchiveMetric(
-                      label: 'Capacity Used',
-                      value:
-                          '${areaProvider.areas.fold<int>(0, (sum, area) => sum + area.currentOccupancy)}',
-                    ),
-                    _ArchiveMetric(
-                      label: 'Live Logs',
-                      value: '${logProvider.logs.length}',
-                    ),
-                    _ArchiveMetric(
-                      label: 'Denied Today',
-                      value:
-                          '${logProvider.logs.where((log) => !log.granted && _sameCalendarDay(log.timestamp, DateTime.now())).length}',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.search_rounded),
-                          hintText: 'Search live audit logs',
-                        ),
-                        onChanged: logProvider.search,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    IconButton.filledTonal(
-                      tooltip: 'Load more logs',
-                      onPressed: logProvider.loadMore,
-                      icon: const Icon(Icons.unfold_more_rounded),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  'Room Modules',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (areaProvider.areas.isEmpty)
-                  const GlassCard(
-                    child: ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.rule_folder_rounded),
-                      title: Text('No rooms configured'),
-                      subtitle: Text('Add rooms to activate capacity control.'),
-                    ),
-                  )
-                else
-                  for (final area in areaProvider.areas)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _RoomAclCard(
-                        area: area,
-                        users: users,
-                        loadingUsers:
-                            snapshot.connectionState == ConnectionState.waiting,
-                        provider: areaProvider,
-                        logs: allLogs
-                            .where((log) => log.areaId == area.id)
-                            .toList(),
-                      ),
-                    ),
-                const SizedBox(height: 8),
-                Text(
-                  'Real-time Access Intelligence',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (logs.isEmpty)
-                  const GlassCard(
-                    child: ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.history_rounded),
-                      title: Text('No live access logs yet'),
-                      subtitle: Text('Scans will appear here as they arrive.'),
-                    ),
-                  )
-                else
-                  for (final log in logs)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _LogCard(
-                        log: log,
-                        onSnapshot: () {
-                          final path = log.snapshotPath;
-                          if (path != null) _showLogSnapshot(context, path);
-                        },
-                      ),
-                    ),
-                TextButton(
-                  onPressed: logProvider.loadMore,
-                  child: const Text('Load more audit logs'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  bool _sameCalendarDay(DateTime left, DateTime right) {
-    return left.year == right.year &&
-        left.month == right.month &&
-        left.day == right.day;
-  }
-}
-
-class _RoomAclCard extends StatelessWidget {
-  const _RoomAclCard({
+class _RoomAssetCard extends StatelessWidget {
+  const _RoomAssetCard({
     required this.area,
-    required this.users,
-    required this.loadingUsers,
-    required this.provider,
     required this.logs,
+    required this.users,
+    required this.expanded,
+    required this.detailView,
+    required this.onToggle,
+    required this.onDetailViewChanged,
+    required this.onExport,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   final Area area;
-  final List<AppUser> users;
-  final bool loadingUsers;
-  final AreaProvider provider;
   final List<AccessLog> logs;
+  final List<AppUser> users;
+  final bool expanded;
+  final _RoomDetailView detailView;
+  final VoidCallback onToggle;
+  final ValueChanged<_RoomDetailView> onDetailViewChanged;
+  final VoidCallback onExport;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
-    final capacity = area.capacity <= 0 ? 1 : area.capacity;
-    final occupancyValue = (area.currentOccupancy / capacity).clamp(0.0, 1.0);
-    final highSecurity = _isHighSecurity(area);
-    return Opacity(
-      opacity: area.active ? 1 : .5,
-      child: GlassCard(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 12),
-        child: Column(
-          children: [
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      area.name,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                  if (highSecurity)
-                    const Chip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text('High security'),
-                    ),
-                ],
-              ),
-              subtitle: Text(
-                '${area.location} - ${area.floor} - Room ${area.roomNumber}\n'
-                'Occupancy ${area.currentOccupancy}${area.capacity > 0 ? ' / ${area.capacity}' : ''}\n'
-                'Roles: ${area.allowedRoles.isEmpty ? 'All' : area.allowedRoles.join(', ')}',
-              ),
-              isThreeLine: true,
-              trailing: Switch(
-                value: area.active,
-                onChanged: (value) =>
-                    provider.updateArea(area.copyWith(active: value)),
-              ),
-            ),
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(99),
-              child: LinearProgressIndicator(
-                value: occupancyValue,
-                minHeight: 4,
-                backgroundColor: Theme.of(
-                  context,
-                ).colorScheme.surfaceContainerHighest.withValues(alpha: .58),
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                  _roomStatusColor,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                TextButton.icon(
-                  onPressed: () => _showEditRoomDialog(context),
-                  icon: const Icon(Icons.edit_rounded),
-                  label: const Text('Edit Room'),
-                ),
-                TextButton.icon(
-                  onPressed: () => _confirmDeleteRoom(context),
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  label: const Text('Delete Room'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            _RoomModuleSegmentedToggle(logCount: logs.length),
-            const SizedBox(height: 8),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(top: 4, bottom: 8),
-              leading: const Icon(Icons.groups_rounded),
-              title: const Text('Room Parameters'),
-              subtitle: Text(
-                '${area.currentOccupancy} occupied of ${area.capacity <= 0 ? 'unlimited' : area.capacity}',
-              ),
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: _CapacityStepper(
-                        label: 'Occupancy',
-                        value: area.currentOccupancy,
-                        onDecrease: area.currentOccupancy <= 0
-                            ? null
-                            : () => _setOccupancy(area.currentOccupancy - 1),
-                        onIncrease: () =>
-                            _setOccupancy(area.currentOccupancy + 1),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _CapacityStepper(
-                        label: 'Capacity',
-                        value: area.capacity,
-                        onDecrease: area.capacity <= 0
-                            ? null
-                            : () => _setCapacity(area.capacity - 1),
-                        onIncrease: () => _setCapacity(area.capacity + 1),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: area.currentOccupancy == 0
-                        ? null
-                        : () => _setOccupancy(0),
-                    icon: const Icon(Icons.restart_alt_rounded),
-                    label: const Text('Reset Occupancy'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(top: 4),
-              leading: const Icon(Icons.manage_search_rounded),
-              title: const Text('Access Intelligence'),
-              subtitle: Text('${logs.length} room access events'),
-              children: [
-                if (logs.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(0, 8, 0, 16),
-                    child: Text(
-                      'No access intelligence has been recorded for this room.',
-                    ),
-                  )
-                else
-                  for (final log in logs.take(8))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _LogCard(
-                        log: log,
-                        onSnapshot: () {
-                          final path = log.snapshotPath;
-                          if (path != null) _showLogSnapshot(context, path);
-                        },
-                      ),
-                    ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(top: 4),
-              leading: const Icon(Icons.assignment_ind_rounded),
-              title: const Text('RBAC Identity Assignments'),
-              subtitle: Text(
-                '${users.where((user) => user.isRegisteredForArea(area)).length} registered identities',
-              ),
-              children: [
-                if (loadingUsers)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: CircularProgressIndicator(),
-                  )
-                else if (users.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(0, 8, 0, 16),
-                    child: Text('No identities are available for RBAC review.'),
-                  )
-                else
-                  for (final user in users.where(
-                    (user) => user.isRegisteredForArea(area),
-                  ))
-                    _RbacUserTile(area: area, user: user),
-                if (!loadingUsers &&
-                    users.any((user) => user.isRegisteredForArea(area)) ==
-                        false)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(0, 8, 0, 16),
-                    child: Text(
-                      'No Face Identity profiles are registered to this room.',
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  bool _isHighSecurity(Area area) {
-    final name = '${area.name} ${area.roomNumber}'.toLowerCase();
-    return name.contains('it') ||
-        name.contains('server') ||
-        name.contains('security') ||
-        name.contains('restricted');
-  }
-
-  Future<void> _setOccupancy(int value) {
-    return provider.updateArea(
-      area.copyWith(currentOccupancy: value.clamp(0, 9999).toInt()),
-    );
-  }
-
-  Future<void> _setCapacity(int value) {
-    return provider.updateArea(
-      area.copyWith(capacity: value.clamp(0, 9999).toInt()),
-    );
-  }
-
-  String _selectedRoomOption(
-    String value,
-    List<String> options,
-    TextEditingController custom,
-  ) {
-    final trimmed = value.trim();
-    if (options.contains(trimmed)) return trimmed;
-    custom.text = trimmed;
-    return _roomOtherValue;
-  }
-
-  String _resolvedRoomOption(String value, TextEditingController custom) {
-    if (value != _roomOtherValue) return value.trim();
-    return custom.text.trim();
-  }
-
-  Future<void> _showEditRoomDialog(BuildContext context) async {
-    final name = TextEditingController(text: area.name);
-    final customLocation = TextEditingController();
-    final customFloor = TextEditingController();
-    final customRoom = TextEditingController();
-    final locationFocus = FocusNode();
-    final floorFocus = FocusNode();
-    final roomFocus = FocusNode();
-    var selectedLocation = _selectedRoomOption(
-      area.location,
-      _campusFaculties,
-      customLocation,
-    );
-    var selectedFloor = _selectedRoomOption(
-      area.floor,
-      _roomFloors,
-      customFloor,
-    );
-    var selectedRoom = _selectedRoomOption(
-      area.roomNumber,
-      _roomNumbers,
-      customRoom,
-    );
-    final form = GlobalKey<FormState>();
-    try {
-      final updated = await showDialog<Area>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text('Edit Room'),
-            content: Form(
-              key: form,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextFormField(
-                      controller: name,
-                      decoration: const InputDecoration(labelText: 'Room Name'),
-                      validator: _required,
-                    ),
-                    const SizedBox(height: 10),
-                    _RoomOtherDropdownField(
-                      value: selectedLocation,
-                      label: 'Location',
-                      options: _campusFaculties,
-                      customController: customLocation,
-                      customFocusNode: locationFocus,
-                      customLabel: 'Campus location',
-                      onChanged: (value) => _setRoomDialogOption(
-                        context,
-                        setDialogState,
-                        value,
-                        selectedLocation,
-                        locationFocus,
-                        (next) => selectedLocation = next,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _RoomOtherDropdownField(
-                      value: selectedFloor,
-                      label: 'Floor',
-                      options: _roomFloors,
-                      customController: customFloor,
-                      customFocusNode: floorFocus,
-                      customLabel: 'Floor',
-                      onChanged: (value) => _setRoomDialogOption(
-                        context,
-                        setDialogState,
-                        value,
-                        selectedFloor,
-                        floorFocus,
-                        (next) => selectedFloor = next,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _RoomOtherDropdownField(
-                      value: selectedRoom,
-                      label: 'Room',
-                      options: _roomNumbers,
-                      displayBuilder: (value) => 'Room $value',
-                      customController: customRoom,
-                      customFocusNode: roomFocus,
-                      customLabel: 'Room',
-                      onChanged: (value) => _setRoomDialogOption(
-                        context,
-                        setDialogState,
-                        value,
-                        selectedRoom,
-                        roomFocus,
-                        (next) => selectedRoom = next,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  if (!form.currentState!.validate()) return;
-                  Navigator.pop(
-                    context,
-                    area.copyWith(
-                      name: name.text.trim(),
-                      location: _resolvedRoomOption(
-                        selectedLocation,
-                        customLocation,
-                      ),
-                      floor: _resolvedRoomOption(selectedFloor, customFloor),
-                      roomNumber: _resolvedRoomOption(selectedRoom, customRoom),
-                    ),
-                  );
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (updated != null) await provider.updateArea(updated);
-    } finally {
-      name.dispose();
-      customLocation.dispose();
-      customFloor.dispose();
-      customRoom.dispose();
-      locationFocus.dispose();
-      floorFocus.dispose();
-      roomFocus.dispose();
-    }
-  }
-
-  void _setRoomDialogOption(
-    BuildContext context,
-    StateSetter setDialogState,
-    String? value,
-    String fallback,
-    FocusNode focusNode,
-    ValueChanged<String> assign,
-  ) {
-    final next = value ?? fallback;
-    setDialogState(() => assign(next));
-    if (next == _roomOtherValue) {
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        if (!context.mounted) return;
-        FocusScope.of(context).requestFocus(focusNode);
-      });
-    }
-  }
-
-  Future<void> _confirmDeleteRoom(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Room'),
-        content: Text(
-          'Delete ${area.name}? This removes the room module and its access parameters. '
-          '${area.currentOccupancy > 0 ? 'Current occupancy is ${area.currentOccupancy}; clear the room before deleting if this is not intentional.' : ''}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
-            ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete Room'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    await provider.deleteArea(area.id);
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Room deleted.')));
-  }
-
-  static String? _required(String? value) =>
-      value == null || value.trim().isEmpty ? 'Required' : null;
-}
-
-class _RoomModuleSegmentedToggle extends StatefulWidget {
-  const _RoomModuleSegmentedToggle({required this.logCount});
-
-  final int logCount;
-
-  @override
-  State<_RoomModuleSegmentedToggle> createState() =>
-      _RoomModuleSegmentedToggleState();
-}
-
-class _RoomOtherDropdownField extends StatelessWidget {
-  const _RoomOtherDropdownField({
-    required this.value,
-    required this.label,
-    required this.options,
-    required this.customController,
-    required this.customFocusNode,
-    required this.customLabel,
-    required this.onChanged,
-    this.displayBuilder,
-  });
-
-  final String value;
-  final String label;
-  final List<String> options;
-  final TextEditingController customController;
-  final FocusNode customFocusNode;
-  final String customLabel;
-  final ValueChanged<String?> onChanged;
-  final String Function(String value)? displayBuilder;
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [...options, _roomOtherValue];
-    return Column(
-      children: [
-        DropdownButtonFormField<String>(
-          initialValue: value,
-          isExpanded: true,
-          decoration: InputDecoration(labelText: label),
-          items: items
-              .map(
-                (item) => DropdownMenuItem(
-                  value: item,
-                  child: Text(
-                    item == _roomOtherValue
-                        ? _roomOtherValue
-                        : displayBuilder?.call(item) ?? item,
-                  ),
-                ),
-              )
-              .toList(),
-          onChanged: onChanged,
-        ),
-        if (value == _roomOtherValue) ...[
-          const SizedBox(height: 10),
-          TextFormField(
-            controller: customController,
-            focusNode: customFocusNode,
-            decoration: InputDecoration(labelText: customLabel),
-            validator: _RoomAclCard._required,
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _RoomModuleSegmentedToggleState
-    extends State<_RoomModuleSegmentedToggle> {
-  var _selected = 'parameters';
-
-  @override
-  Widget build(BuildContext context) {
-    return SegmentedButton<String>(
-      segments: [
-        const ButtonSegment(
-          value: 'parameters',
-          icon: Icon(Icons.tune_rounded),
-          label: Text('Room Parameters'),
-        ),
-        ButtonSegment(
-          value: 'intelligence',
-          icon: const Icon(Icons.manage_search_rounded),
-          label: Text('Access Intelligence (${widget.logCount})'),
-        ),
-      ],
-      selected: {_selected},
-      onSelectionChanged: (selection) {
-        setState(() => _selected = selection.first);
-      },
-    );
-  }
-}
-
-class _CapacityStepper extends StatelessWidget {
-  const _CapacityStepper({
-    required this.label,
-    required this.value,
-    required this.onDecrease,
-    required this.onIncrease,
-  });
-
-  final String label;
-  final int value;
-  final VoidCallback? onDecrease;
-  final VoidCallback? onIncrease;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.outline.withValues(alpha: .28),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-        child: Column(
-          children: [
-            Text(label, style: Theme.of(context).textTheme.labelLarge),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  tooltip: 'Decrease $label',
-                  onPressed: onDecrease,
-                  icon: const Icon(Icons.remove_rounded),
-                ),
-                SizedBox(
-                  width: 42,
-                  child: Text(
-                    '$value',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Increase $label',
-                  onPressed: onIncrease,
-                  icon: const Icon(Icons.add_rounded),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RbacUserTile extends StatelessWidget {
-  const _RbacUserTile({required this.area, required this.user});
-
-  final Area area;
-  final AppUser user;
-
-  @override
-  Widget build(BuildContext context) {
-    final explicitlyRevoked = area.revokedUserIds.contains(user.id);
-    final effectiveAccess = user.canAccessRegisteredArea(area);
-    final statusColor = explicitlyRevoked
-        ? Theme.of(context).colorScheme.error
-        : effectiveAccess
-        ? const Color(0xFF32D583)
-        : Theme.of(context).colorScheme.onSurfaceVariant;
-    final id = user.identityNumber.isEmpty ? user.id : user.identityNumber;
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(Icons.verified_user_rounded, color: statusColor),
-      title: Text(user.name.isEmpty ? 'Unnamed profile' : user.name),
-      subtitle: Text(
-        '$id - ${user.roleLabel}\n${_rbacStatus(explicitlyRevoked, effectiveAccess)}',
-      ),
-      isThreeLine: true,
-      trailing: Chip(
-        visualDensity: VisualDensity.compact,
-        label: Text(effectiveAccess ? 'Allowed' : 'Denied'),
-        side: BorderSide(color: statusColor.withValues(alpha: .45)),
-      ),
-    );
-  }
-
-  String _rbacStatus(bool revoked, bool effectiveAccess) {
-    if (revoked) return 'Revoked by room policy';
-    return effectiveAccess
-        ? 'Registered room and role policy verified'
-        : 'Registered room found, role or capacity denied';
-  }
-}
-
-class _LogsTab extends StatefulWidget {
-  const _LogsTab();
-
-  @override
-  State<_LogsTab> createState() => _LogsTabState();
-}
-
-class _LogsTabState extends State<_LogsTab> {
-  String _filter = 'All';
-
-  @override
-  Widget build(BuildContext context) {
-    final provider = context.watch<LogProvider>();
-    final logs = _filteredLogs(provider.logs);
-    final grouped = _groupLogs(logs);
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        TextField(
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search_rounded),
-            hintText: 'Search logs',
-          ),
-          onChanged: provider.search,
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final label in const ['All', 'Granted', 'Denied'])
-              ChoiceChip(
-                label: Text(label),
-                selected: _filter == label,
-                showCheckmark: false,
-                onSelected: (_) => setState(() => _filter = label),
-              ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        for (final entry in grouped.entries) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(2, 4, 2, 8),
-            child: Text(
-              entry.key,
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          for (final log in entry.value)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _LogCard(
-                log: log,
-                onSnapshot: () => _showSnapshot(context, log.snapshotPath!),
-              ),
-            ),
-        ],
-        TextButton(
-          onPressed: provider.loadMore,
-          child: const Text('Load more'),
-        ),
-      ],
-    );
-  }
-
-  List<AccessLog> _filteredLogs(List<AccessLog> logs) {
-    if (_filter == 'Granted') return logs.where((log) => log.granted).toList();
-    if (_filter == 'Denied') return logs.where((log) => !log.granted).toList();
-    return logs;
-  }
-
-  Map<String, List<AccessLog>> _groupLogs(List<AccessLog> logs) {
-    final grouped = <String, List<AccessLog>>{};
-    for (final log in logs) {
-      grouped.putIfAbsent(_dateGroup(log.timestamp), () => []).add(log);
-    }
-    return grouped;
-  }
-
-  String _dateGroup(DateTime timestamp) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final logDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
-    final difference = today.difference(logDate).inDays;
-    if (difference == 0) return 'Today';
-    if (difference == 1) return 'Yesterday';
-    return DateFormat.yMMMd().format(timestamp);
-  }
-
-  void _showSnapshot(BuildContext context, String path) {
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: .78),
-      builder: (_) => Dialog.fullscreen(
-        backgroundColor: const Color(0xFF070A0F),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Unknown Face Snapshot',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                            ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(
-                        Icons.close_rounded,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Center(
-                  child: File(path).existsSync()
-                      ? InteractiveViewer(
-                          child: Image.file(File(path), fit: BoxFit.contain),
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            'Snapshot is no longer available on this device.\n$path',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _LogCard extends StatelessWidget {
-  const _LogCard({
-    required this.log,
-    required this.onSnapshot,
-    this.showSnapshotAction = true,
-  });
-
-  final AccessLog log;
-  final VoidCallback onSnapshot;
-  final bool showSnapshotAction;
-
-  @override
-  Widget build(BuildContext context) {
-    final statusColor = log.granted
-        ? const Color(0xFF32D583)
-        : const Color(0xFFFF5B66);
+    final occupants = _occupantLogs(area, logs);
     return GlassCard(
-      padding: EdgeInsets.zero,
-      child: IntrinsicHeight(
-        child: Row(
-          children: [
-            Container(width: 4, color: statusColor),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            log.userName,
-                            style: const TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${log.areaName} - ${DateFormat.jm().format(log.timestamp)}\n${log.reason}',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    if (showSnapshotAction &&
-                        !log.granted &&
-                        log.snapshotPath != null)
-                      TextButton(
-                        onPressed: onSnapshot,
-                        child: const Text('View Snapshot'),
-                      )
-                    else
-                      Text(
-                        log.status.toUpperCase(),
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: statusColor,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                  ],
+      onTap: onToggle,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: area.active
+                    ? const Color(0xFF0D9488).withValues(alpha: .14)
+                    : const Color(0xFFE11D48).withValues(alpha: .12),
+                child: Icon(
+                  area.active ? Icons.sensor_door_rounded : Icons.lock_rounded,
+                  color: area.active
+                      ? const Color(0xFF0D9488)
+                      : const Color(0xFFE11D48),
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SettingsTab extends StatefulWidget {
-  const _SettingsTab({this.user});
-
-  final AppUser? user;
-
-  @override
-  State<_SettingsTab> createState() => _SettingsTabState();
-}
-
-class _SettingsTabState extends State<_SettingsTab> {
-  bool _accessAlerts = true;
-  bool _faceIdentityAlerts = true;
-  bool _sosBusy = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    final system = context.watch<SystemProvider>();
-    final activeUser = widget.user ?? auth.user;
-    final settings = system.settings;
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        GlassCard(
-          child: Row(
-            children: [
-              _FaceAvatar(user: activeUser),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      activeUser?.name ?? 'Administrator',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      _roomLabel(area),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
                         fontWeight: FontWeight.w900,
+                        fontSize: 16,
                       ),
                     ),
-                    const SizedBox(height: 4),
                     Text(
-                      activeUser?.email ?? '',
+                      '${area.location} | ${area.floor}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
+              IconButton(
+                tooltip: 'Export',
+                onPressed: onExport,
+                icon: const Icon(Icons.file_download_rounded),
+              ),
+              IconButton(
+                tooltip: 'Edit',
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_rounded),
+              ),
+              IconButton(
+                tooltip: 'Delete',
+                onPressed: onDelete,
+                icon: const Icon(Icons.delete_outline_rounded),
+              ),
+              Icon(
+                expanded
+                    ? Icons.keyboard_arrow_up_rounded
+                    : Icons.keyboard_arrow_down_rounded,
+              ),
             ],
           ),
-        ),
-        const SizedBox(height: 12),
-        if (!auth.isAdmin) ...[
-          GlassCard(
-            padding: EdgeInsets.zero,
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.face_retouching_natural_rounded),
-                  title: const Text('Re-enroll Face Identity'),
-                  subtitle: const Text('Update your Face Identity profile'),
-                  onTap: () => _pushNamedAfterFrame(
-                    context,
-                    FaceRegistrationScreen.route,
+          if (expanded) ...[
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<_RoomDetailView>(
+                segments: const [
+                  ButtonSegment(
+                    value: _RoomDetailView.settings,
+                    icon: Icon(Icons.tune_rounded),
+                    label: Text('Settings'),
                   ),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  secondary: const Icon(Icons.notifications_active_rounded),
-                  value: _accessAlerts,
-                  onChanged: (value) => setState(() => _accessAlerts = value),
-                  title: const Text('Real-time Access Alerts'),
-                  subtitle: const Text(
-                    'Notify me when access events are logged',
+                  ButtonSegment(
+                    value: _RoomDetailView.history,
+                    icon: Icon(Icons.history_rounded),
+                    label: Text('History'),
                   ),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  secondary: const Icon(Icons.security_rounded),
-                  value: _faceIdentityAlerts,
-                  onChanged: (value) =>
-                      setState(() => _faceIdentityAlerts = value),
-                  title: const Text('Face Identity Status Alerts'),
-                  subtitle: const Text('Notify me about enrollment changes'),
-                ),
-              ],
+                ],
+                selected: {detailView},
+                onSelectionChanged: (selection) =>
+                    onDetailViewChanged(selection.first),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFE11D48),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-            onPressed: _sosBusy || activeUser == null
-                ? null
-                : () => _raiseCampusSos(context, activeUser),
-            icon: const Icon(Icons.support_agent_rounded),
-            label: Text(
-              _sosBusy ? 'Sending Request' : 'Campus Assistance Request',
-            ),
-          ),
-          const SizedBox(height: 12),
+            const SizedBox(height: 14),
+            if (detailView == _RoomDetailView.settings)
+              _RoomSettingsView(area: area, logs: logs, users: users)
+            else
+              _RoomHistoryView(area: area, logs: logs, occupants: occupants),
+          ],
         ],
-        if (auth.isAdmin) ...[
-          GlassCard(
-            padding: EdgeInsets.zero,
-            child: Column(
-              children: [
-                SwitchListTile(
-                  value: settings.afterHoursAlerts,
-                  onChanged: system.toggleAfterHoursAlerts,
-                  title: const Text('After Hours'),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  value: settings.intrusionAlerts,
-                  onChanged: system.toggleIntrusionAlerts,
-                  title: const Text('Intrusion Alerts'),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  value: settings.monitoringWindowLogging,
-                  onChanged: system.toggleMonitoringWindowLogging,
-                  title: const Text('Monitoring Window'),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.tune_rounded),
-                  title: Text(
-                    'Environmental Protocol Overrides ${_time(settings.afterHoursStart)}-${_time(settings.afterHoursEnd)}',
-                  ),
-                  subtitle: const Text('Inactive-window scanner behavior'),
-                  onTap: () => _showAccessWindow(context, system),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  secondary: const Icon(Icons.light_mode_rounded),
-                  value: settings.lowLightEnhancement,
-                  onChanged: system.toggleLowLightEnhancement,
-                  title: const Text('Low-Light Enhancement'),
-                  subtitle: const Text(
-                    'Increase scan tolerance during inactive windows',
-                  ),
-                ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  secondary: const Icon(Icons.battery_saver_rounded),
-                  value: settings.hardwarePowerSaveMode,
-                  onChanged: system.toggleHardwarePowerSaveMode,
-                  title: const Text('Hardware Power-Save Mode'),
-                  subtitle: const Text(
-                    'Reduce scanner activity during inactive windows',
-                  ),
-                ),
-              ],
+      ),
+    );
+  }
+}
+
+class _RoomSettingsView extends StatelessWidget {
+  const _RoomSettingsView({
+    required this.area,
+    required this.logs,
+    required this.users,
+  });
+
+  final Area area;
+  final List<AccessLog> logs;
+  final List<AppUser> users;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth > 680;
+        final chart = _RoomPieChart(
+          area: area,
+          occupants: _occupantLogs(area, logs),
+          users: users,
+        );
+        final controls = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _CapacitySlider(area: area),
+            const SizedBox(height: 12),
+            _RolePolicyToggles(area: area),
+          ],
+        );
+        if (wide) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: 260, height: 210, child: chart),
+              const SizedBox(width: 18),
+              Expanded(child: controls),
+            ],
+          );
+        }
+        return Column(
+          children: [
+            SizedBox(height: 220, child: chart),
+            const SizedBox(height: 12),
+            controls,
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CapacitySlider extends StatefulWidget {
+  const _CapacitySlider({required this.area});
+
+  final Area area;
+
+  @override
+  State<_CapacitySlider> createState() => _CapacitySliderState();
+}
+
+class _CapacitySliderState extends State<_CapacitySlider> {
+  late double _value;
+
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.area.capacity.clamp(0, 250).toDouble();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CapacitySlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.area.capacity != widget.area.capacity) {
+      _value = widget.area.capacity.clamp(0, 250).toDouble();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Capacity ${_value.round()}',
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
+        Slider(
+          min: 0,
+          max: 250,
+          divisions: 250,
+          value: _value,
+          label: '${_value.round()}',
+          onChanged: (value) => setState(() => _value = value),
+          onChangeEnd: (value) {
+            context.read<AreaProvider>().updateArea(
+              widget.area.copyWith(capacity: value.round()),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _RolePolicyToggles extends StatelessWidget {
+  const _RolePolicyToggles({required this.area});
+
+  final Area area;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = area.allowedRoles
+        .map((role) => role.trim().toLowerCase())
+        .where((role) => role.isNotEmpty)
+        .toSet();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Role Policy',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: [
+            FilterChip(
+              selected: selected.contains('student'),
+              avatar: const Icon(Icons.school_rounded),
+              label: const Text('Students'),
+              onSelected: (value) => _toggle(context, 'Student', value),
             ),
-          ),
-          const SizedBox(height: 12),
-        ],
-        _SettingTile(
-          title: 'Edit Profile',
-          onTap: () => _pushNamedAfterFrame(
-            context,
-            EditProfileScreen.route,
-            rootNavigator: true,
-          ),
+            FilterChip(
+              selected: selected.contains('staff'),
+              avatar: const Icon(Icons.work_rounded),
+              label: const Text('Staff'),
+              onSelected: (value) => _toggle(context, 'Staff', value),
+            ),
+          ],
         ),
-        _SettingTile(
-          title: 'Change Password',
-          onTap: () => _sendPasswordReset(context, auth),
-        ),
-        _SettingTile(
-          title: 'Help & Support',
-          onTap: () => _openHelpSupport(context, settings.administratorEmail),
-        ),
-        if (!auth.isAdmin)
-          FilledButton.tonal(
-            onPressed: auth.loading
-                ? null
-                : () => _signOutAndClear(context, auth),
-            child: const Text('Logout'),
-          ),
       ],
     );
   }
 
-  String _time(int hour) => '${hour.toString().padLeft(2, '0')}:00';
+  void _toggle(BuildContext context, String role, bool value) {
+    final roles = area.allowedRoles
+        .where((item) => item.trim().toLowerCase() != role.toLowerCase())
+        .toList();
+    if (value) roles.add(role);
+    context.read<AreaProvider>().updateArea(area.copyWith(allowedRoles: roles));
+  }
+}
 
-  Future<void> _sendPasswordReset(
-    BuildContext context,
-    AuthProvider auth,
-  ) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final resetEmail = auth.passwordResetEmail;
-    final ok = await auth.sendPasswordReset();
-    if (!context.mounted) return;
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          ok
-              ? 'Password reset email sent to $resetEmail.'
-              : auth.error ?? 'Unable to send password reset email.',
+class _RoomPieChart extends StatelessWidget {
+  const _RoomPieChart({
+    required this.area,
+    required this.occupants,
+    required this.users,
+  });
+
+  final Area area;
+  final List<AccessLog> occupants;
+  final List<AppUser> users;
+
+  @override
+  Widget build(BuildContext context) {
+    final userById = {for (final user in users) user.id: user};
+    var staff = 0;
+    var students = 0;
+    for (final log in occupants) {
+      final user = userById[log.userId];
+      if ((user?.roleLabel ?? '').toLowerCase().contains('staff')) {
+        staff++;
+      } else {
+        students++;
+      }
+    }
+    final available = math.max(area.capacity - occupants.length, 0);
+    final sections = <PieChartSectionData>[
+      if (staff > 0)
+        PieChartSectionData(
+          value: staff.toDouble(),
+          title: 'Staff $staff',
+          color: const Color(0xFF2563EB),
+          radius: 54,
+          titleStyle: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      if (students > 0)
+        PieChartSectionData(
+          value: students.toDouble(),
+          title: 'Students $students',
+          color: const Color(0xFF0D9488),
+          radius: 54,
+          titleStyle: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      PieChartSectionData(
+        value: available <= 0 && staff == 0 && students == 0
+            ? 1
+            : available.toDouble(),
+        title: 'Open $available',
+        color: const Color(0xFF94A3B8),
+        radius: 54,
+        titleStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    ];
+    return PieChart(
+      PieChartData(sections: sections, centerSpaceRadius: 30, sectionsSpace: 2),
+    );
+  }
+}
+
+class _RoomHistoryView extends StatelessWidget {
+  const _RoomHistoryView({
+    required this.area,
+    required this.logs,
+    required this.occupants,
+  });
+
+  final Area area;
+  final List<AccessLog> logs;
+  final List<AccessLog> occupants;
+
+  @override
+  Widget build(BuildContext context) {
+    final roomLogs = logs.where((log) => _logBelongsToArea(log, area)).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Live Occupancy',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 8),
+        if (occupants.isEmpty)
+          const Text('No live occupants recorded.')
+        else
+          for (final log in occupants.take(6))
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.person_pin_circle_rounded),
+              title: Text(log.userName),
+              subtitle: Text(_preciseDate(log.timestamp)),
+            ),
+        const Divider(height: 24),
+        const Text(
+          'Server Feed',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 8),
+        for (final log in roomLogs.take(6)) _CompactLogLine(log: log),
+      ],
+    );
+  }
+}
+
+class _RoomEditSheet extends StatefulWidget {
+  const _RoomEditSheet({required this.area});
+
+  final Area area;
+
+  @override
+  State<_RoomEditSheet> createState() => _RoomEditSheetState();
+}
+
+class _RoomEditSheetState extends State<_RoomEditSheet> {
+  late final TextEditingController _name;
+  late final TextEditingController _location;
+  late final TextEditingController _floor;
+  late final TextEditingController _room;
+  late double _capacity;
+  late Set<String> _roles;
+  bool _active = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final area = widget.area;
+    _name = TextEditingController(text: area.name);
+    _location = TextEditingController(text: area.location);
+    _floor = TextEditingController(text: area.floor);
+    _room = TextEditingController(text: area.roomNumber);
+    _capacity = area.capacity.clamp(0, 250).toDouble();
+    _roles = area.allowedRoles
+        .map((role) => role.trim())
+        .where((role) => role.isNotEmpty)
+        .toSet();
+    _active = area.active;
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _location.dispose();
+    _floor.dispose();
+    _room.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 18,
+          right: 18,
+          top: 18,
+          bottom: MediaQuery.viewInsetsOf(context).bottom + 18,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Edit Room',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'Room Name'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _location,
+                decoration: const InputDecoration(labelText: 'Location'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _floor,
+                      decoration: const InputDecoration(labelText: 'Floor'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _room,
+                      decoration: const InputDecoration(labelText: 'Room'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _active,
+                onChanged: (value) => setState(() => _active = value),
+                title: const Text('Active'),
+              ),
+              Text(
+                'Capacity ${_capacity.round()}',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              Slider(
+                min: 0,
+                max: 250,
+                divisions: 250,
+                value: _capacity,
+                label: '${_capacity.round()}',
+                onChanged: (value) => setState(() => _capacity = value),
+              ),
+              const Text(
+                'Role Policy',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  FilterChip(
+                    selected: _roles.any(
+                      (role) => role.toLowerCase() == 'student',
+                    ),
+                    avatar: const Icon(Icons.school_rounded),
+                    label: const Text('Students'),
+                    onSelected: (selected) => _toggleRole('Student', selected),
+                  ),
+                  FilterChip(
+                    selected: _roles.any(
+                      (role) => role.toLowerCase() == 'staff',
+                    ),
+                    avatar: const Icon(Icons.work_rounded),
+                    label: const Text('Staff'),
+                    onSelected: (selected) => _toggleRole('Staff', selected),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_rounded),
+                  label: Text(_saving ? 'Saving' : 'Save Changes'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Future<void> _showAccessWindow(
-    BuildContext context,
-    SystemProvider system,
-  ) async {
-    var start = system.settings.afterHoursStart;
-    var end = system.settings.afterHoursEnd;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) => Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+  void _toggleRole(String role, bool selected) {
+    setState(() {
+      _roles.removeWhere((item) => item.toLowerCase() == role.toLowerCase());
+      if (selected) _roles.add(role);
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final next = widget.area.copyWith(
+      name: _name.text.trim(),
+      location: _location.text.trim(),
+      floor: _floor.text.trim(),
+      roomNumber: _room.text.trim(),
+      active: _active,
+      capacity: _capacity.round(),
+      allowedRoles: _roles.toList(),
+    );
+    await context.read<AreaProvider>().updateArea(next);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    Navigator.pop(context);
+  }
+}
+
+class _EntryTimelineTab extends StatefulWidget {
+  const _EntryTimelineTab({required this.initialLimit});
+
+  final int initialLimit;
+
+  @override
+  State<_EntryTimelineTab> createState() => _EntryTimelineTabState();
+}
+
+class _EntryTimelineTabState extends State<_EntryTimelineTab> {
+  final _search = TextEditingController();
+  String _status = 'all';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<LogProvider>();
+    final logs = _filtered(provider.logs).take(widget.initialLimit).toList();
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _search,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search_rounded),
+                  hintText: 'Search timeline',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            const SizedBox(width: 10),
+            DropdownButton<String>(
+              value: _status,
+              items: const [
+                DropdownMenuItem(value: 'all', child: Text('All')),
+                DropdownMenuItem(value: 'granted', child: Text('Granted')),
+                DropdownMenuItem(value: 'denied', child: Text('Denied')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _status = value);
+              },
+            ),
+          ],
+        ),
+        if (provider.error != null) ...[
+          const SizedBox(height: 12),
+          _InlineError(
+            message:
+                'Entry Timeline sync is delayed. Firestore will retry automatically.',
+          ),
+        ],
+        const SizedBox(height: 12),
+        if (logs.isEmpty)
+          const _EmptyState(
+            icon: Icons.terminal_rounded,
+            title: 'No timeline entries',
+          )
+        else
+          for (final log in logs)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _TimelineRow(
+                log: log,
+                onTap: () => _showSecurityDetail(context, log),
+              ),
+            ),
+        TextButton.icon(
+          onPressed: provider.loadMore,
+          icon: const Icon(Icons.expand_more_rounded),
+          label: const Text('Load more'),
+        ),
+      ],
+    );
+  }
+
+  List<AccessLog> _filtered(List<AccessLog> logs) {
+    final query = _search.text.trim().toLowerCase();
+    return logs.where((log) {
+      if (_status != 'all' && log.status != _status) return false;
+      if (query.isEmpty) return true;
+      return [
+        log.userName,
+        log.areaName,
+        log.status,
+        log.reason,
+      ].join(' ').toLowerCase().contains(query);
+    }).toList();
+  }
+}
+
+class _TimelineRow extends StatelessWidget {
+  const _TimelineRow({required this.log, required this.onTap});
+
+  final AccessLog log;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = log.granted
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFE11D48);
+    return GlassCard(
+      onTap: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        children: [
+          Icon(
+            log.granted ? Icons.check_circle_rounded : Icons.cancel_rounded,
+            color: color,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Environmental Protocol Overrides',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+                  '${log.userName} | ${log.areaName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
-                const SizedBox(height: 4),
                 Text(
-                  'Set inactive-window timing for low-light and hardware power behavior.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        initialValue: start,
-                        decoration: const InputDecoration(labelText: 'Start'),
-                        items: List.generate(
-                          24,
-                          (hour) => DropdownMenuItem(
-                            value: hour,
-                            child: Text(_time(hour)),
-                          ),
-                        ),
-                        onChanged: (value) async {
-                          if (value != null) setSheetState(() => start = value);
-                          await system.updateAfterHours(start: start, end: end);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<int>(
-                        initialValue: end,
-                        decoration: const InputDecoration(labelText: 'End'),
-                        items: List.generate(
-                          24,
-                          (hour) => DropdownMenuItem(
-                            value: hour,
-                            child: Text(_time(hour)),
-                          ),
-                        ),
-                        onChanged: (value) async {
-                          if (value != null) setSheetState(() => end = value);
-                          await system.updateAfterHours(start: start, end: end);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Done'),
-                  ),
+                  _preciseDate(log.timestamp),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
+          const SizedBox(width: 8),
+          Text(
+            log.status.toUpperCase(),
+            style: TextStyle(color: color, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+void _showSecurityDetail(BuildContext context, AccessLog log) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      final file = log.snapshotPath == null ? null : File(log.snapshotPath!);
+      final hasPhoto = file != null && file.existsSync();
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      log.granted ? 'Access Detail' : 'Security Detail',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (!log.granted)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    height: 220,
+                    width: double.infinity,
+                    child: hasPhoto
+                        ? Image.file(file, fit: BoxFit.cover)
+                        : DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
+                            ),
+                            child: const Center(
+                              child: Icon(
+                                Icons.no_photography_rounded,
+                                size: 42,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+              const SizedBox(height: 12),
+              _DetailLine(label: 'Status', value: log.status.toUpperCase()),
+              _DetailLine(label: 'User', value: log.userName),
+              _DetailLine(label: 'Room', value: log.areaName),
+              _DetailLine(
+                label: 'Timestamp',
+                value: _preciseDate(log.timestamp),
+              ),
+              _DetailLine(label: 'Reason', value: log.reason),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _DetailLine extends StatelessWidget {
+  const _DetailLine({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 92,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+          Expanded(child: Text(value.isEmpty ? 'Unavailable' : value)),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserDataArchiveTab extends StatefulWidget {
+  const _UserDataArchiveTab();
+
+  @override
+  State<_UserDataArchiveTab> createState() => _UserDataArchiveTabState();
+}
+
+class _UserDataArchiveTabState extends State<_UserDataArchiveTab> {
+  final _search = TextEditingController();
+  _ArchiveFilter _filter = _ArchiveFilter.all;
+  DateTime? _start;
+  DateTime? _end;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    return StreamBuilder<List<AppUser>>(
+      stream: firebase.watchAllUsers(),
+      builder: (context, snapshot) {
+        final users = snapshot.data ?? const <AppUser>[];
+        final filtered = _filtered(users);
+        return ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _ArchiveFilterToggle(
+                  label: 'All',
+                  count: users.length,
+                  selected: _filter == _ArchiveFilter.all,
+                  onTap: () => setState(() => _filter = _ArchiveFilter.all),
+                ),
+                _ArchiveFilterToggle(
+                  label: 'Approvals',
+                  count: users.where((user) => user.isPending).length,
+                  selected: _filter == _ArchiveFilter.approvals,
+                  onTap: () =>
+                      setState(() => _filter = _ArchiveFilter.approvals),
+                ),
+                _ArchiveFilterToggle(
+                  label: 'Face Pending',
+                  count: users.where((user) => !user.hasFace).length,
+                  selected: _filter == _ArchiveFilter.facePending,
+                  onTap: () =>
+                      setState(() => _filter = _ArchiveFilter.facePending),
+                ),
+                _ArchiveFilterToggle(
+                  label: 'Staff',
+                  count: users
+                      .where(
+                        (user) =>
+                            user.roleLabel.toLowerCase().contains('staff'),
+                      )
+                      .length,
+                  selected: _filter == _ArchiveFilter.staff,
+                  onTap: () => setState(() => _filter = _ArchiveFilter.staff),
+                ),
+                _ArchiveFilterToggle(
+                  label: 'Students',
+                  count: users
+                      .where(
+                        (user) =>
+                            user.roleLabel.toLowerCase().contains('student'),
+                      )
+                      .length,
+                  selected: _filter == _ArchiveFilter.students,
+                  onTap: () =>
+                      setState(() => _filter = _ArchiveFilter.students),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _search,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search_rounded),
+                hintText: 'Search archived profiles',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _DateFilterChip(
+                  label: 'Start',
+                  value: _start,
+                  onTap: () => _pickDate(start: true),
+                  onClear: () => setState(() => _start = null),
+                ),
+                _DateFilterChip(
+                  label: 'End',
+                  value: _end,
+                  onTap: () => _pickDate(start: false),
+                  onClear: () => setState(() => _end = null),
+                ),
+              ],
+            ),
+            if (snapshot.hasError) ...[
+              const SizedBox(height: 12),
+              _InlineError(
+                message:
+                    'Archive sync is temporarily unavailable. Try again after Firestore finishes indexing.',
+              ),
+            ],
+            const SizedBox(height: 12),
+            if (filtered.isEmpty)
+              const _EmptyState(
+                icon: Icons.inventory_2_rounded,
+                title: 'No archive records found',
+              )
+            else
+              for (final user in filtered)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: GlassCard(
+                    padding: const EdgeInsets.all(14),
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: CircleAvatar(
+                        child: Icon(
+                          user.hasFace
+                              ? Icons.face_retouching_natural_rounded
+                              : Icons.face_retouching_off_rounded,
+                        ),
+                      ),
+                      title: Text(
+                        user.name,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      subtitle: Text(
+                        '${_uniqueId(user)} | ${user.roleLabel} | ${user.status}',
+                      ),
+                      trailing: TextButton(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) => _UserDeepDetailPage(user: user),
+                          ),
+                        ),
+                        child: const Text('View Full Profile'),
+                      ),
+                    ),
+                  ),
+                ),
+          ],
         );
       },
     );
   }
 
-  Future<void> _raiseCampusSos(BuildContext context, AppUser user) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final userLogs =
-        context
-            .read<LogProvider>()
-            .logs
-            .where((log) => log.userId == user.id)
-            .toList()
-          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-    final lastScannedLocation = userLogs.isEmpty
-        ? (user.room.isEmpty ? 'User ID' : user.room)
-        : userLogs.first.areaName;
-    setState(() => _sosBusy = true);
-    try {
-      await FirebaseService().addIncidentReport(
-        reporterId: user.id,
-        reporterName: user.name.isEmpty ? 'Student' : user.name,
-        title: 'Campus Assistance Request',
-        severity: 'High',
-        areaName: user.room.isEmpty ? 'User ID' : user.room,
-        reporterIdentityNumber: user.identityNumber.isEmpty
-            ? user.id
-            : user.identityNumber,
-        lastScannedLocation: lastScannedLocation,
-        details: 'Assistance requested from the User ID settings panel.',
-      );
-      if (!context.mounted) return;
-      await context.read<AlertProvider>().raiseIntrusionAlert(
-        title: 'Campus Assistance Request',
-        body:
-            '${user.name.isEmpty ? 'A student' : user.name} requested immediate assistance.',
-        severity: 'High',
-      );
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Campus assistance request sent.')),
-      );
-    } catch (e) {
-      if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Unable to send emergency alert: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _sosBusy = false);
-    }
+  List<AppUser> _filtered(List<AppUser> users) {
+    final query = _search.text.trim().toLowerCase();
+    return users.where((user) {
+      if (_start != null && user.createdAt.isBefore(_start!)) return false;
+      if (_end != null &&
+          !user.createdAt.isBefore(_end!.add(const Duration(days: 1)))) {
+        return false;
+      }
+      switch (_filter) {
+        case _ArchiveFilter.all:
+          break;
+        case _ArchiveFilter.approvals:
+          if (!user.isPending) return false;
+        case _ArchiveFilter.facePending:
+          if (user.hasFace) return false;
+        case _ArchiveFilter.staff:
+          if (!user.roleLabel.toLowerCase().contains('staff')) return false;
+        case _ArchiveFilter.students:
+          if (!user.roleLabel.toLowerCase().contains('student')) return false;
+      }
+      if (query.isEmpty) return true;
+      return [
+        user.name,
+        user.email,
+        user.identityNumber,
+        user.roleLabel,
+        user.status,
+      ].join(' ').toLowerCase().contains(query);
+    }).toList();
   }
 
-  Future<void> _openHelpSupport(
-    BuildContext context,
-    String administratorEmail,
-  ) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final uri = Uri(
-      scheme: 'mailto',
-      path: administratorEmail.trim().isEmpty
-          ? 'administrator@campus-access.local'
-          : administratorEmail.trim(),
-      queryParameters: const {
-        'subject': 'Campus Access Support Request',
-        'body':
-            'Hello Administrator,\r\n\r\nI need assistance with campus access.\r\n\r\nRegards,',
-      },
+  Future<void> _pickDate({required bool start}) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: start
+          ? (_start ?? DateTime.now())
+          : (_end ?? DateTime.now()),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
     );
-    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!opened && context.mounted) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Unable to open an email application.')),
-      );
-    }
+    if (picked == null) return;
+    setState(() {
+      if (start) {
+        _start = picked;
+      } else {
+        _end = picked;
+      }
+    });
   }
 }
 
-class _FaceAvatar extends StatelessWidget {
-  const _FaceAvatar({required this.user});
+class _ArchiveFilterToggle extends StatelessWidget {
+  const _ArchiveFilterToggle({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
 
-  final AppUser? user;
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final photo = user?.photoUrl;
-    final file = photo == null ? null : File(photo);
-    final image = file != null && file.existsSync() ? FileImage(file) : null;
-    return CircleAvatar(
-      radius: 34,
-      backgroundImage: image,
-      child: image == null ? const Icon(Icons.person_rounded, size: 34) : null,
+    return FilterChip(
+      selected: selected,
+      onSelected: (_) => onTap(),
+      label: Text('$label $count'),
+    );
+  }
+}
+
+class _DateFilterChip extends StatelessWidget {
+  const _DateFilterChip({
+    required this.label,
+    required this.value,
+    required this.onTap,
+    required this.onClear,
+  });
+
+  final String label;
+  final DateTime? value;
+  final VoidCallback onTap;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputChip(
+      avatar: const Icon(Icons.event_rounded, size: 18),
+      label: Text(
+        value == null ? label : '$label ${DateFormat.yMMMd().format(value!)}',
+      ),
+      onPressed: onTap,
+      onDeleted: value == null ? null : onClear,
+    );
+  }
+}
+
+class _UserDeepDetailPage extends StatelessWidget {
+  const _UserDeepDetailPage({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    return AppBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          title: const Text('View Full Profile'),
+        ),
+        body: StreamBuilder<List<AccessLog>>(
+          stream: firebase.watchUserLogs(user.id, limit: 120),
+          builder: (context, snapshot) {
+            final logs = snapshot.data ?? const <AccessLog>[];
+            return ListView(
+              padding: const EdgeInsets.all(18),
+              children: [
+                GlassCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        user.name,
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _StatusChip(
+                            icon: Icons.fingerprint_rounded,
+                            label: _uniqueId(user),
+                          ),
+                          _RoleBadge(role: user.roleLabel),
+                          _FaceEnrollmentChip(enrolled: user.hasFace),
+                          _StatusChip(
+                            icon: Icons.vpn_key_rounded,
+                            label: '${user.assignedRooms.length} permissions',
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (snapshot.hasError) ...[
+                  const SizedBox(height: 12),
+                  _InlineError(message: 'History timeline sync is delayed.'),
+                ],
+                const SizedBox(height: 12),
+                const Text(
+                  'History Timeline',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 8),
+                if (logs.isEmpty)
+                  const _EmptyState(
+                    icon: Icons.history_rounded,
+                    title: 'No scan history',
+                  )
+                else
+                  for (final log in logs)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _TimelineRow(
+                        log: log,
+                        onTap: () => _showSecurityDetail(context, log),
+                      ),
+                    ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsTab extends StatelessWidget {
+  const _SettingsTab({required this.onSignOut});
+
+  final Future<void> Function() onSignOut;
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    final system = context.watch<SystemProvider>();
+    final user = auth.user;
+    final settings = system.settings;
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        GlassCard(
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const CircleAvatar(child: Icon(Icons.person_rounded)),
+            title: Text(
+              user?.name ?? 'Administrator',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            subtitle: Text(
+              '${user?.email ?? ''}\nRole: ${user?.roleLabel ?? 'Admin'}',
+            ),
+            trailing: user?.hasFace == true
+                ? const Icon(Icons.verified_rounded)
+                : const Icon(Icons.warning_rounded),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SwitchListTile(
+          value: settings.globalLockdown,
+          onChanged: system.toggleLockdown,
+          title: const Text('Global Lockdown'),
+          secondary: const Icon(Icons.emergency_rounded),
+        ),
+        SwitchListTile(
+          value: settings.afterHoursAlerts,
+          onChanged: system.toggleAfterHoursAlerts,
+          title: const Text('After-hours Alerts'),
+          secondary: const Icon(Icons.notifications_active_rounded),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                initialValue: settings.afterHoursStart,
+                decoration: const InputDecoration(labelText: 'Alert Start'),
+                items: List.generate(
+                  24,
+                  (hour) =>
+                      DropdownMenuItem(value: hour, child: Text('$hour:00')),
+                ),
+                onChanged: (value) {
+                  if (value != null) {
+                    system.updateAfterHours(
+                      start: value,
+                      end: settings.afterHoursEnd,
+                    );
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<int>(
+                initialValue: settings.afterHoursEnd,
+                decoration: const InputDecoration(labelText: 'Alert End'),
+                items: List.generate(
+                  24,
+                  (hour) =>
+                      DropdownMenuItem(value: hour, child: Text('$hour:00')),
+                ),
+                onChanged: (value) {
+                  if (value != null) {
+                    system.updateAfterHours(
+                      start: settings.afterHoursStart,
+                      end: value,
+                    );
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _SettingTile(
+          icon: Icons.face_retouching_natural_rounded,
+          title: 'Identity Enrollment',
+          onTap: () =>
+              Navigator.pushNamed(context, FaceRegistrationScreen.route),
+        ),
+        _SettingTile(
+          icon: Icons.notifications_active_rounded,
+          title: 'Notifications',
+          onTap: () => Navigator.pushNamed(context, NotificationsScreen.route),
+        ),
+        _SettingTile(
+          icon: Icons.center_focus_strong_rounded,
+          title: 'Run Scanner',
+          onTap: () => Navigator.pushNamed(context, FaceLoginScreen.route),
+        ),
+        const SizedBox(height: 12),
+        FilledButton.tonalIcon(
+          onPressed: auth.loading ? null : onSignOut,
+          icon: const Icon(Icons.logout_rounded),
+          label: const Text('Sign Out'),
+        ),
+      ],
     );
   }
 }
 
 class _SettingTile extends StatelessWidget {
-  const _SettingTile({required this.title, this.onTap});
+  const _SettingTile({required this.icon, required this.title, this.onTap});
+
+  final IconData icon;
   final String title;
   final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) =>
-      ListTile(title: Text(title), onTap: onTap);
+  Widget build(BuildContext context) {
+    return ListTile(leading: Icon(icon), title: Text(title), onTap: onTap);
+  }
 }
+
+class _CompactLogLine extends StatelessWidget {
+  const _CompactLogLine({required this.log});
+
+  final AccessLog log;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = log.granted
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFE11D48);
+    return InkWell(
+      onTap: () => _showSecurityDetail(context, log),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          children: [
+            Icon(Icons.circle, size: 10, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${DateFormat.Hms().format(log.timestamp)}  ${log.userName}  ${log.status}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InlineError extends StatelessWidget {
+  const _InlineError({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(
+              Icons.sync_problem_rounded,
+              color: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.icon, required this.title});
+
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Column(
+            children: [
+              Icon(icon, size: 42),
+              const SizedBox(height: 10),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _needsAdminReview(AppUser user) =>
+    user.isPending || !user.hasFace || user.hasPendingPhotoApproval;
+
+bool _sameDay(DateTime left, DateTime right) =>
+    left.year == right.year &&
+    left.month == right.month &&
+    left.day == right.day;
+
+DateTime _workWeekStart() {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  return today.subtract(Duration(days: today.weekday - DateTime.monday));
+}
+
+double _chartMaxY(List<AccessLog> logs) {
+  var maxCount = 10;
+  final start = _workWeekStart();
+  for (var i = 0; i < 5; i++) {
+    final day = start.add(Duration(days: i));
+    final count = logs.where((log) => _sameDay(log.timestamp, day)).length;
+    if (count > maxCount) maxCount = count;
+  }
+  return (((maxCount + 9) ~/ 10) * 10).toDouble();
+}
+
+String _roomLabel(Area area) {
+  final name = area.name.trim();
+  if (name.isNotEmpty) return name;
+  final floor = area.floor.trim();
+  final room = area.roomNumber.trim();
+  if (floor.isNotEmpty && room.isNotEmpty) return '$floor - Room $room';
+  if (room.isNotEmpty) return 'Room $room';
+  return area.location.trim().isEmpty ? 'Room Asset' : area.location.trim();
+}
+
+String _uniqueId(AppUser user) {
+  final identity = user.identityNumber.trim();
+  if (identity.isNotEmpty) return identity;
+  return user.id.length <= 8 ? user.id : user.id.substring(0, 8);
+}
+
+List<String> _dedupeRooms(Iterable<String> values) {
+  final rooms = <String>[];
+  for (final value in values) {
+    final room = value.trim();
+    if (room.isEmpty) continue;
+    if (rooms.any((existing) => _sameAccessTarget(existing, room))) continue;
+    rooms.add(room);
+  }
+  return rooms;
+}
+
+bool _sameAccessTarget(String left, String right) =>
+    _accessKey(left) == _accessKey(right);
+
+String _accessKey(String value) =>
+    value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
+bool _logBelongsToArea(AccessLog log, Area area) {
+  if (log.areaId.trim().isNotEmpty && log.areaId == area.id) return true;
+  final roomKeys = {
+    area.name,
+    area.roomNumber,
+    _roomLabel(area),
+    '${area.location} ${area.floor} ${area.roomNumber}',
+  }.map(_accessKey).toSet();
+  return roomKeys.contains(_accessKey(log.areaName));
+}
+
+List<AccessLog> _occupantLogs(Area area, List<AccessLog> logs) {
+  final latest = <String, AccessLog>{};
+  final today = DateTime.now();
+  final roomLogs =
+      logs
+          .where((log) => log.granted && _sameDay(log.timestamp, today))
+          .where((log) => _logBelongsToArea(log, area))
+          .toList()
+        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+  for (final log in roomLogs) {
+    final key = log.userId.trim().isEmpty ? log.userName : log.userId;
+    latest.putIfAbsent(key, () => log);
+  }
+  return latest.values.toList();
+}
+
+DateTime _latestRoomLogTime(Area area, List<AccessLog> logs) {
+  final roomLogs = logs.where((log) => _logBelongsToArea(log, area));
+  if (roomLogs.isEmpty) return DateTime.fromMillisecondsSinceEpoch(0);
+  return roomLogs
+      .map((log) => log.timestamp)
+      .reduce((left, right) => left.isAfter(right) ? left : right);
+}
+
+String _preciseDate(DateTime date) =>
+    DateFormat('EEEE, MMMM d, yyyy h:mm:ss a').format(date);

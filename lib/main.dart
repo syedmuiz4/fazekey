@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -62,36 +64,10 @@ class FaceKeyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(create: (_) => AreaProvider(firebase)),
         ChangeNotifierProvider(create: (_) => LogProvider(firebase, localDb)),
-        ChangeNotifierProvider(
-          create: (_) => SystemProvider(firebase)..listen(),
-        ),
+        ChangeNotifierProvider(create: (_) => SystemProvider(firebase)),
         ChangeNotifierProvider(create: (_) => AlertProvider(push)..listen()),
       ],
-      child: Consumer<AuthProvider>(
-        builder: (context, auth, _) {
-          return MaterialApp(
-            title: 'Campus Access',
-            debugShowCheckedModeBanner: false,
-            themeMode: ThemeMode.light,
-            theme: _theme(Brightness.light),
-            initialRoute: SplashScreen.route,
-            routes: {
-              SplashScreen.route: (_) => const SplashScreen(),
-              WelcomeScreen.route: (_) => const WelcomeScreen(),
-              LoginScreen.route: (_) => const LoginScreen(),
-              RegisterScreen.route: (_) => const RegisterScreen(),
-              FaceRegistrationScreen.route: (_) =>
-                  const FaceRegistrationScreen(),
-              FaceLoginScreen.route: (_) => const FaceLoginScreen(),
-              DashboardScreen.route: (_) => const DashboardScreen(),
-              EditProfileScreen.route: (_) => const EditProfileScreen(),
-              NotificationsScreen.route: (_) => const NotificationsScreen(),
-              AddAreaScreen.route: (_) => const AddAreaScreen(),
-              AccessResultScreen.route: (_) => const AccessResultScreen(),
-            },
-          );
-        },
-      ),
+      child: _FaceKeyMaterialApp(theme: _theme(Brightness.light)),
     );
   }
 
@@ -141,5 +117,65 @@ class FaceKeyApp extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
     );
+  }
+}
+
+class _FaceKeyMaterialApp extends StatefulWidget {
+  const _FaceKeyMaterialApp({required this.theme});
+
+  final ThemeData theme;
+
+  @override
+  State<_FaceKeyMaterialApp> createState() => _FaceKeyMaterialAppState();
+}
+
+class _FaceKeyMaterialAppState extends State<_FaceKeyMaterialApp> {
+  bool _firestoreListenersActive = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+    _syncFirestoreListeners(auth.hasSignedInAccount);
+    return MaterialApp(
+      title: 'Campus Access',
+      debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.light,
+      theme: widget.theme,
+      initialRoute: SplashScreen.route,
+      routes: {
+        SplashScreen.route: (_) => const SplashScreen(),
+        WelcomeScreen.route: (_) => const WelcomeScreen(),
+        LoginScreen.route: (_) => const LoginScreen(),
+        RegisterScreen.route: (_) => const RegisterScreen(),
+        FaceRegistrationScreen.route: (_) => const FaceRegistrationScreen(),
+        FaceLoginScreen.route: (_) => const FaceLoginScreen(),
+        DashboardScreen.route: (_) => const DashboardScreen(),
+        EditProfileScreen.route: (_) => const EditProfileScreen(),
+        NotificationsScreen.route: (_) => const NotificationsScreen(),
+        AddAreaScreen.route: (_) => const AddAreaScreen(),
+        AccessResultScreen.route: (_) => const AccessResultScreen(),
+      },
+    );
+  }
+
+  void _syncFirestoreListeners(bool signedIn) {
+    if (_firestoreListenersActive == signedIn) return;
+    _firestoreListenersActive = signedIn;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final areas = context.read<AreaProvider>();
+      final logs = context.read<LogProvider>();
+      final system = context.read<SystemProvider>();
+      if (signedIn) {
+        areas.listen();
+        logs.listen();
+        system.listen();
+        unawaited(logs.syncPending());
+      } else {
+        unawaited(areas.stop());
+        unawaited(logs.stop());
+        unawaited(system.stop());
+      }
+    });
   }
 }

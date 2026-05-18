@@ -34,7 +34,7 @@ class AccessLog {
     userId: map['userId'] ?? '',
     userName: map['userName'] ?? 'Unknown',
     areaId: map['areaId'] ?? '',
-    areaName: map['areaName'] ?? 'Campus Gate',
+    areaName: map['areaName'] ?? 'No active room configured',
     status: map['status'] ?? 'denied',
     reason: map['reason'] ?? '',
     timestamp: (map['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),

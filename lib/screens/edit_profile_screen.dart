@@ -122,6 +122,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               return const Center(child: Text('Sign in to edit your profile.'));
             }
             _loadUser(user);
+            final photoBlockReason = _profilePhotoBlockReason(user);
             return _ProfileForm(
               form: _form,
               user: user,
@@ -134,11 +135,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               homeAddress: _homeAddress,
               emergencyContact: _emergencyContact,
               photoPath: _photoPath,
-              onPickPhoto: _showImageSourceSheet,
+              onPickPhoto: photoBlockReason == null
+                  ? _showImageSourceSheet
+                  : null,
               onUpdateProfile: _updateProfile,
               updatingProfile: _updatingProfile,
               pickingPhoto: _pickingPhoto,
               profileError: _profileError,
+              photoApprovalNote: photoBlockReason,
             );
           },
         ),
@@ -150,7 +154,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final profileKey =
         '${user.id}|${user.name}|${user.email}|${user.identityNumber}|'
         '${user.course}|${user.faculty}|${user.phone}|${user.homeAddress}|'
-        '${user.emergencyContact}|${user.photoUrl}';
+        '${user.emergencyContact}|${user.photoUrl}|${user.pendingPhotoUrl}|'
+        '${user.photoChangeRequestedAt}|${user.photoUpdatedAt}';
     if (_loadedProfileKey == profileKey) return;
     _loadedProfileKey = profileKey;
     _currentProfile = user;
@@ -211,8 +216,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       );
       if (picked == null) return;
       final saved = await _persistProfileImage(picked, current);
+      await _firebase.requestProfilePhotoUpdate(
+        userId: current.id,
+        photoUrl: saved.path,
+      );
       if (!mounted) return;
-      setState(() => _photoPath = saved.path);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Profile picture sent for admin approval.'),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _profileError = 'Unable to update profile picture: $e');
@@ -253,7 +266,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           phone: _phone.text,
           homeAddress: _homeAddress.text,
           emergencyContact: _emergencyContact.text,
-          photoUrl: _photoPath,
         ),
       );
       ok = true;
@@ -270,6 +282,20 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     messenger.showSnackBar(
       SnackBar(content: Text(ok ? 'Profile updated.' : _profileError!)),
     );
+  }
+
+  String? _profilePhotoBlockReason(AppUser user) {
+    if (user.hasPendingPhotoApproval) {
+      return 'Profile picture request is pending admin approval.';
+    }
+    final now = DateTime.now();
+    final lastChange = user.photoUpdatedAt ?? user.photoChangeRequestedAt;
+    if (lastChange != null &&
+        lastChange.year == now.year &&
+        lastChange.month == now.month) {
+      return 'Profile picture can be changed again next month.';
+    }
+    return null;
   }
 }
 
@@ -291,6 +317,7 @@ class _ProfileForm extends StatelessWidget {
     required this.updatingProfile,
     required this.pickingPhoto,
     required this.profileError,
+    required this.photoApprovalNote,
   });
 
   final GlobalKey<FormState> form;
@@ -304,11 +331,12 @@ class _ProfileForm extends StatelessWidget {
   final TextEditingController homeAddress;
   final TextEditingController emergencyContact;
   final String? photoPath;
-  final VoidCallback onPickPhoto;
+  final VoidCallback? onPickPhoto;
   final VoidCallback? onUpdateProfile;
   final bool updatingProfile;
   final bool pickingPhoto;
   final String? profileError;
+  final String? photoApprovalNote;
 
   @override
   Widget build(BuildContext context) {
@@ -343,6 +371,17 @@ class _ProfileForm extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      if (photoApprovalNote != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          photoApprovalNote!,
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w800,
+                              ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -504,7 +543,7 @@ class _EditableFaceAvatar extends StatelessWidget {
 
   final String? photoPath;
   final bool pickingPhoto;
-  final VoidCallback onPickPhoto;
+  final VoidCallback? onPickPhoto;
 
   @override
   Widget build(BuildContext context) {

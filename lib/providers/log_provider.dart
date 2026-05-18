@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../models/access_log.dart';
@@ -37,6 +38,14 @@ class LogProvider extends ChangeNotifier {
         );
   }
 
+  Future<void> stop() async {
+    await _sub?.cancel();
+    _sub = null;
+    logs = [];
+    error = null;
+    notifyListeners();
+  }
+
   void search(String value) {
     query = value;
     listen();
@@ -51,12 +60,23 @@ class LogProvider extends ChangeNotifier {
     if (!firestoreLogging) return;
     try {
       await _firebase.addLog(log);
-    } catch (_) {
+    } catch (e) {
       await _localDb.queueLog(log);
       pendingCount = (await _localDb.pendingLogs()).length;
+      notifyListeners();
+      if (_isPermissionDenied(e)) rethrow;
+      return;
     }
     notifyListeners();
   }
+
+  bool _isPermissionDenied(Object error) =>
+      (error is FirebaseException &&
+          error.plugin == 'cloud_firestore' &&
+          error.code == 'permission-denied') ||
+      error.toString().toLowerCase().contains(
+        'cloud_firestore/permission-denied',
+      );
 
   Future<void> syncPending() async {
     syncing = true;

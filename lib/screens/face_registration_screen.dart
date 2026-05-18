@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
@@ -33,6 +34,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   String? _error;
   bool _busy = false;
   bool _modelReady = false;
+  bool _isProcessing = false;
 
   @override
   void initState() {
@@ -48,10 +50,10 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   }
 
   Future<void> _prepareFaceModel() async {
-    final ready = await context.read<FaceProvider>().ensureModelReady();
-    if (mounted) {
-      setState(() => _modelReady = ready);
-    }
+    final ready = await _ensureModelReadyAfterFrame(
+      context.read<FaceProvider>(),
+    );
+    if (mounted) _setStateAfterFrame(() => _modelReady = ready);
   }
 
   Future<void> _initCamera() async {
@@ -76,32 +78,33 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         await controller.dispose();
         return;
       }
-      setState(() {});
+      _setStateAfterFrame(() {});
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) _setStateAfterFrame(() => _error = e.toString());
     }
   }
 
   Future<void> _capture() async {
     final controller = _controller;
     if (_busy ||
+        _isProcessing ||
         controller == null ||
         !controller.value.isInitialized ||
         controller.value.isTakingPicture) {
       return;
     }
-    setState(() => _busy = true);
+    _setStateAfterFrame(() => _busy = true);
     try {
       final file = await controller.takePicture();
       if (mounted) {
-        setState(() {
+        _setStateAfterFrame(() {
           _captures.add(file);
           _busy = false;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
+        _setStateAfterFrame(() {
           _error = e.toString();
           _busy = false;
         });
@@ -112,15 +115,69 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
   Future<void> _disposeCamera() async {
     final controller = _controller;
     _controller = null;
-    if (mounted) setState(() {});
-    await controller?.dispose();
+    if (mounted) _setStateAfterFrame(() {});
+    if (controller == null) return;
+    await _stopAndDisposeController(controller);
+  }
+
+  Future<void> _stopAndDisposeController(CameraController controller) async {
+    try {
+      if (controller.value.isInitialized &&
+          controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (_) {
+      // The controller may already be unwinding its stream.
+    }
+    try {
+      await controller.dispose();
+    } catch (_) {
+      // The platform may already have released this camera instance.
+    }
+  }
+
+  Future<bool> _ensureModelReadyAfterFrame(FaceProvider faceProvider) {
+    final completer = Completer<bool>();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        completer.complete(false);
+        return;
+      }
+      completer.complete(await faceProvider.ensureModelReady());
+    });
+    WidgetsBinding.instance.scheduleFrame();
+    return completer.future;
+  }
+
+  void _setStateAfterFrame(VoidCallback update) {
+    update();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {});
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  Future<void> _popAfterCameraRelease() async {
+    if (_isProcessing) return;
+    _isProcessing = true;
+    await _disposeCamera();
+    if (!mounted) return;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(
+        context,
+      ).pushNamedAndRemoveUntil(DashboardScreen.route, (_) => false);
+    });
   }
 
   @override
   void dispose() {
     final controller = _controller;
     _controller = null;
-    unawaited(controller?.dispose());
+    if (controller != null) {
+      unawaited(_stopAndDisposeController(controller));
+    }
     unawaited(_faceProvider?.closeDetector());
     super.dispose();
   }
@@ -169,7 +226,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
               child: Row(
                 children: [
                   IconButton.filledTonal(
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: _popAfterCameraRelease,
                     icon: const Icon(Icons.arrow_back_rounded),
                   ),
                   const SizedBox(width: 12),
@@ -216,34 +273,55 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       final faceProvider = context.read<FaceProvider>();
                       final authProvider = context.read<AuthProvider>();
                       final modelReady =
-                          _modelReady || await faceProvider.ensureModelReady();
+                          _modelReady ||
+                          await _ensureModelReadyAfterFrame(faceProvider);
                       if (!modelReady) {
-                        if (mounted) setState(() => _modelReady = false);
+                        if (mounted) {
+                          _setStateAfterFrame(() => _modelReady = false);
+                        }
                         return;
                       }
                       if (!mounted) return;
-                      setState(() => _busy = true);
+                      _isProcessing = true;
+                      _setStateAfterFrame(() => _busy = true);
                       await _disposeCamera();
+                      final registrationUid = selectedUser == null
+                          ? FirebaseAuth.instance.currentUser?.uid
+                          : selectedUser.id;
+                      if (registrationUid == null ||
+                          registrationUid.trim().isEmpty) {
+                        if (mounted) {
+                          _setStateAfterFrame(() {
+                            _busy = false;
+                            _isProcessing = false;
+                            _error =
+                                'A Firebase Auth session is required for face enrollment.';
+                          });
+                          await _initCamera();
+                        }
+                        return;
+                      }
                       final ok = await faceProvider.registerFace(
                         user,
                         _captures,
+                        userId: registrationUid,
                       );
                       await authProvider.refreshProfile();
                       if (ok && mounted) {
                         SchedulerBinding.instance.addPostFrameCallback((_) {
                           if (!mounted) return;
                           final navigator = Navigator.of(context);
-                          if (selectedUser == null) {
-                            navigator.pushReplacementNamed(
-                              DashboardScreen.route,
-                            );
-                          } else {
-                            navigator.pop(true);
-                          }
+                          navigator.pushNamedAndRemoveUntil(
+                            DashboardScreen.route,
+                            (_) => false,
+                          );
                         });
                       }
                       if (!ok && mounted) {
-                        setState(() => _busy = false);
+                        _setStateAfterFrame(() {
+                          _busy = false;
+                          _isProcessing = false;
+                        });
                         await _initCamera();
                       }
                     },

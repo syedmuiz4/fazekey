@@ -24,17 +24,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _phone = TextEditingController();
+  String _role = 'User';
+  String _position = 'Student';
   int _level = 1;
   String? _department;
-  String? _area;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<AreaProvider>().listen();
-    });
-  }
 
   @override
   void dispose() {
@@ -52,9 +45,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final areas = context.watch<AreaProvider>().areas;
     final departmentOptions = _departmentsForLevel(areas, _level);
     final selectedDepartment = _selectedOption(departmentOptions, _department);
-    final areaOptions = _restrictedAreasForLevel(areas, _level);
-    final selectedArea = _selectedOption(areaOptions, _area);
-    _syncSelection(department: selectedDepartment, area: selectedArea);
+    final adminRoleSelected = _role.trim().toLowerCase() == 'admin';
+    _syncSelection(department: selectedDepartment);
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -134,52 +126,75 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         decoration: const InputDecoration(labelText: 'Phone'),
                         validator: _required,
                       ),
-                      const SizedBox(height: 16),
-                      _TextSelector<int>(
-                        label: 'Level',
-                        value: _level,
-                        options: const [1, 2, 3],
-                        textFor: (level) => 'Level $level',
-                        onChanged: (level) => setState(() {
-                          _level = level;
-                          _department = _firstDepartmentForLevel(areas, level);
-                          _area = _firstRestrictedAreaForLevel(areas, level);
-                        }),
-                      ),
-                      const SizedBox(height: 16),
-                      if (selectedArea == null)
-                        Text(
-                          'No restricted rooms configured for Level $_level.',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                        )
-                      else
-                        DropdownButtonFormField<String>(
-                          key: ValueKey('register-area-$_level-$selectedArea'),
-                          initialValue: selectedArea,
-                          isExpanded: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Restricted Room',
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: _role,
+                        decoration: const InputDecoration(labelText: 'Role'),
+                        items: const [
+                          DropdownMenuItem(value: 'User', child: Text('User')),
+                          DropdownMenuItem(
+                            value: 'Admin',
+                            child: Text('Admin'),
                           ),
-                          validator: _required,
-                          items: areaOptions
-                              .map(
-                                (area) => DropdownMenuItem(
-                                  value: area,
-                                  child: Text(
-                                    area,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (area) => setState(() => _area = area),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() {
+                              _role = value;
+                              if (_role.trim().toLowerCase() == 'admin') {
+                                _level = 3;
+                                _position = 'Admin';
+                              } else {
+                                _level = 1;
+                                _position = _position == 'Admin'
+                                    ? 'Student'
+                                    : _position;
+                              }
+                            });
+                          }
+                        },
+                      ),
+                      if (!adminRoleSelected) ...[
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          initialValue: _position == 'Admin'
+                              ? 'Student'
+                              : _position,
+                          decoration: const InputDecoration(
+                            labelText: 'Position',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Student',
+                              child: Text('Student'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Staff',
+                              child: Text('Staff'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _position = value);
+                            }
+                          },
                         ),
+                        const SizedBox(height: 16),
+                        _TextSelector<int>(
+                          label: 'Access Level',
+                          value: _level,
+                          options: const [1, 2, 3],
+                          textFor: (level) => 'Level $level',
+                          onChanged: (level) => setState(() {
+                            _level = level;
+                            _department = _firstDepartmentForLevel(
+                              areas,
+                              level,
+                            );
+                            _level = level;
+                          }),
+                        ),
+                      ],
                       if (auth.error != null) ...[
                         const SizedBox(height: 12),
                         Text(
@@ -195,16 +210,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         loading: auth.loading,
                         onPressed: () async {
                           if (!_form.currentState!.validate()) return;
-                          if (selectedArea == null) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Add a restricted room for Level $_level before registering this account.',
-                                ),
-                              ),
-                            );
-                            return;
-                          }
                           final ok = await context
                               .read<AuthProvider>()
                               .register(
@@ -213,13 +218,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 password: _password.text,
                                 department: selectedDepartment ?? '',
                                 phone: _phone.text,
-                                room: selectedArea,
+                                room: '',
+                                rooms: const [],
+                                role: _role,
+                                accessLevel: adminRoleSelected ? 3 : _level,
                                 identityNumber: _identityNumber.text,
+                                position: adminRoleSelected
+                                    ? 'Admin'
+                                    : _position,
                               );
                           if (ok && context.mounted) {
-                            Navigator.pushReplacementNamed(
-                              context,
+                            Navigator.of(context).pushNamedAndRemoveUntil(
                               FaceRegistrationScreen.route,
+                              (_) => false,
                             );
                           }
                         },
@@ -256,31 +267,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return departments.isEmpty ? _fallbackDepartments : departments;
   }
 
-  List<String> _restrictedAreasForLevel(List<Area> areas, int level) {
-    final floor = 'Level $level';
-    final names =
-        areas
-            .where(
-              (area) =>
-                  area.active &&
-                  area.floor.trim().toLowerCase() == floor.toLowerCase(),
-            )
-            .map(
-              (area) => area.name.trim().isEmpty
-                  ? '$floor - Room ${area.roomNumber}'
-                  : area.name.trim(),
-            )
-            .toSet()
-            .toList()
-          ..sort();
-    return names;
-  }
-
-  String? _firstRestrictedAreaForLevel(List<Area> areas, int level) {
-    final options = _restrictedAreasForLevel(areas, level);
-    return options.isEmpty ? null : options.first;
-  }
-
   String? _firstDepartmentForLevel(List<Area> areas, int level) {
     final options = _departmentsForLevel(areas, level);
     return options.isEmpty ? null : options.first;
@@ -293,14 +279,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
         : options.first;
   }
 
-  void _syncSelection({required String? department, required String? area}) {
-    if (_department == department && _area == area) return;
+  void _syncSelection({required String? department}) {
+    if (_department == department) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || (_department == department && _area == area)) return;
-      setState(() {
-        _department = department;
-        _area = area;
-      });
+      if (!mounted || _department == department) return;
+      setState(() => _department = department);
     });
   }
 

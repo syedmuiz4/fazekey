@@ -31,13 +31,16 @@ class Area {
   final int currentOccupancy;
   final int capacity;
 
+  bool get allowsUserRole =>
+      allowedRoles.any((role) => role.trim().toLowerCase() == 'user');
+
   factory Area.fromMap(String id, Map<String, dynamic> map) => Area(
     id: id,
     name: map['name'] ?? '',
     location: map['location'] ?? '',
     floor: map['floor'] ?? '',
     roomNumber: map['roomNumber'] ?? '',
-    active: map['active'] ?? true,
+    active: (map['isActive'] ?? map['active']) ?? true,
     createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     allowedDepartments: List<String>.from(
       map['allowedDepartments'] ?? const [],
@@ -55,6 +58,7 @@ class Area {
     'floor': floor,
     'roomNumber': roomNumber,
     'active': active,
+    'isActive': active,
     'createdAt': Timestamp.fromDate(createdAt),
     'allowedDepartments': allowedDepartments,
     'allowedRoles': allowedRoles,

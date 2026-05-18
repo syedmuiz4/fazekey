@@ -17,6 +17,7 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   static const _logoHeroTag = 'facekey-logo';
+  final Key _scaffoldKey = UniqueKey();
   late final AnimationController _scanController;
 
   @override
@@ -29,9 +30,9 @@ class _SplashScreenState extends State<SplashScreen>
     Future.delayed(const Duration(milliseconds: 1400), () {
       if (!mounted) return;
       final auth = context.read<AuthProvider>();
-      Navigator.pushReplacementNamed(
-        context,
+      Navigator.of(context).pushNamedAndRemoveUntil(
         auth.isAuthenticated ? DashboardScreen.route : WelcomeScreen.route,
+        (_) => false,
       );
     });
   }
@@ -46,6 +47,7 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return AppBackground(
       child: Scaffold(
+        key: _scaffoldKey,
         backgroundColor: Colors.transparent,
         body: Stack(
           alignment: Alignment.center,

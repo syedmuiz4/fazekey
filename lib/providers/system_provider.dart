@@ -27,6 +27,14 @@ class SystemProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> stop() async {
+    await _sub?.cancel();
+    _sub = null;
+    settings = SystemSettings.defaults();
+    error = null;
+    notifyListeners();
+  }
+
   Future<void> save(SystemSettings next) async {
     loading = true;
     error = null;

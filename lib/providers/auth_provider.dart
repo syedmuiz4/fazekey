@@ -77,7 +77,11 @@ class AuthProvider extends ChangeNotifier {
     required String department,
     required String phone,
     required String room,
+    List<String> rooms = const [],
+    String role = 'student',
+    int accessLevel = 3,
     String identityNumber = '',
+    String position = 'Student',
   }) async {
     return _guard(() async {
       user = await _firebase.register(
@@ -87,7 +91,11 @@ class AuthProvider extends ChangeNotifier {
         department: department,
         phone: phone,
         room: room,
+        rooms: rooms,
+        role: role,
+        accessLevel: accessLevel,
         identityNumber: identityNumber,
+        position: position,
       );
     });
   }
@@ -138,7 +146,7 @@ class AuthProvider extends ChangeNotifier {
   Stream<AppUser?> watchActiveUserProfile() {
     if (hasSignedInAccount) return _firebase.watchCurrentUserProfile();
     final activeUser = user;
-    if (activeUser != null) return _firebase.watchUser(activeUser.id);
+    if (activeUser != null) return Stream<AppUser?>.value(activeUser);
     return Stream<AppUser?>.value(null);
   }
 
@@ -215,16 +223,30 @@ class AuthProvider extends ChangeNotifier {
         left.department == right.department &&
         left.phone == right.phone &&
         left.room == right.room &&
+        _sameStringList(left.rooms, right.rooms) &&
         left.role == right.role &&
         left.identityNumber == right.identityNumber &&
         left.course == right.course &&
         left.faculty == right.faculty &&
         left.currentSemester == right.currentSemester &&
         left.accessLevel == right.accessLevel &&
+        left.status == right.status &&
+        left.position == right.position &&
         left.homeAddress == right.homeAddress &&
         left.emergencyContact == right.emergencyContact &&
         left.hasFace == right.hasFace &&
-        left.photoUrl == right.photoUrl;
+        left.photoUrl == right.photoUrl &&
+        left.pendingPhotoUrl == right.pendingPhotoUrl &&
+        left.photoChangeRequestedAt == right.photoChangeRequestedAt &&
+        left.photoUpdatedAt == right.photoUpdatedAt;
+  }
+
+  bool _sameStringList(List<String> left, List<String> right) {
+    if (left.length != right.length) return false;
+    for (var i = 0; i < left.length; i++) {
+      if (left[i] != right[i]) return false;
+    }
+    return true;
   }
 
   @override
