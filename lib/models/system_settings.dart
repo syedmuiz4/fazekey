@@ -113,7 +113,6 @@ class SystemSettings {
   }
 
   bool shouldDenyScanForRole(String? role, DateTime now) {
-    if (role?.trim().toLowerCase() == 'admin') return false;
     return shouldDenyScanAt(now);
   }
 

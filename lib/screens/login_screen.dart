@@ -5,7 +5,6 @@ import '../providers/auth_provider.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/primary_button.dart';
-import 'dashboard_screen.dart';
 import 'face_login_screen.dart';
 import 'register_screen.dart';
 
@@ -34,7 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
             padding: const EdgeInsets.all(24),
             children: [
               Text(
-                'Welcome back',
+                'Security Portal',
                 style: Theme.of(context).textTheme.headlineLarge?.copyWith(
                   fontWeight: FontWeight.w900,
                 ),
@@ -45,6 +44,15 @@ class _LoginScreenState extends State<LoginScreen> {
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 28),
+              Center(
+                child: Image.asset(
+                  'assets/images/logo2.png',
+                  width: 132,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
+              ),
+              const SizedBox(height: 18),
               GlassCard(
                 child: Form(
                   key: _form,
@@ -85,7 +93,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           );
                           if (ok && context.mounted) {
                             Navigator.of(context).pushNamedAndRemoveUntil(
-                              DashboardScreen.route,
+                              '/admin_dashboard',
                               (_) => false,
                             );
                           }

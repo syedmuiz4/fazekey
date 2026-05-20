@@ -21,11 +21,14 @@ import 'screens/login_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/splash_screen.dart';
+import 'screens/staff_dashboard_screen.dart';
+import 'screens/user_dashboard_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'services/firebase_service.dart';
 import 'services/face_recognition_service.dart';
 import 'services/local_database_service.dart';
 import 'services/push_notification_service.dart';
+import 'widgets/corporate_chrome.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,54 +70,72 @@ class FaceKeyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => SystemProvider(firebase)),
         ChangeNotifierProvider(create: (_) => AlertProvider(push)..listen()),
       ],
-      child: _FaceKeyMaterialApp(theme: _theme(Brightness.light)),
+      child: _FaceKeyMaterialApp(theme: _theme()),
     );
   }
 
-  ThemeData _theme(Brightness brightness) {
-    const frostBackground = Color(0xFFF0F9FF);
-    const deepTeal = Color(0xFF0D9488);
+  ThemeData _theme() {
     final base = ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
       colorScheme:
           ColorScheme.fromSeed(
-            seedColor: deepTeal,
+            seedColor: CorporateColors.teal,
             brightness: Brightness.light,
           ).copyWith(
-            primary: deepTeal,
-            secondary: const Color(0xFF0284C7),
-            surface: Colors.white,
-            surfaceContainerHighest: const Color(0xFFE0F2FE),
+            primary: CorporateColors.teal,
+            secondary: CorporateColors.lightBlue,
+            surface: CorporateColors.surface,
+            surfaceContainerHighest: CorporateColors.surfaceHigh,
+            outline: CorporateColors.border,
           ),
       textTheme: GoogleFonts.spaceGroteskTextTheme(
         ThemeData(brightness: Brightness.light).textTheme,
       ),
     );
     return base.copyWith(
-      scaffoldBackgroundColor: frostBackground,
+      scaffoldBackgroundColor: CorporateColors.background,
       appBarTheme: const AppBarTheme(
         centerTitle: false,
         elevation: 0,
-        foregroundColor: Color(0xFF0F172A),
+        backgroundColor: Colors.transparent,
+        foregroundColor: CorporateColors.text,
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: Colors.white.withValues(alpha: .82),
+        fillColor: CorporateColors.surfaceHigh,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: CorporateColors.border),
         ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: CorporateColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: CorporateColors.teal, width: 1.4),
+        ),
+        labelStyle: const TextStyle(color: CorporateColors.mutedText),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: deepTeal,
+          backgroundColor: CorporateColors.teal,
           foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w900),
         ),
       ),
       cardTheme: CardThemeData(
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        color: CorporateColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      chipTheme: base.chipTheme.copyWith(
+        backgroundColor: CorporateColors.surfaceHigh,
+        selectedColor: CorporateColors.teal.withValues(alpha: .18),
+        side: const BorderSide(color: CorporateColors.border),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
@@ -150,6 +171,8 @@ class _FaceKeyMaterialAppState extends State<_FaceKeyMaterialApp> {
         FaceRegistrationScreen.route: (_) => const FaceRegistrationScreen(),
         FaceLoginScreen.route: (_) => const FaceLoginScreen(),
         DashboardScreen.route: (_) => const DashboardScreen(),
+        StaffDashboardScreen.route: (_) => const StaffDashboardScreen(),
+        UserDashboardScreen.route: (_) => const UserDashboardScreen(),
         EditProfileScreen.route: (_) => const EditProfileScreen(),
         NotificationsScreen.route: (_) => const NotificationsScreen(),
         AddAreaScreen.route: (_) => const AddAreaScreen(),

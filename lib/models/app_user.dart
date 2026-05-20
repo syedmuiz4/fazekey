@@ -54,7 +54,6 @@ class AppUser {
   final DateTime? photoUpdatedAt;
 
   bool get isAdmin => role.trim().toLowerCase() == 'admin';
-  bool get hasAdminOverride => isAdmin;
   bool get isApproved => status.trim().toLowerCase() == 'approved';
   bool get isPending => status.trim().toLowerCase() == 'pending';
   bool get hasPendingPhotoApproval =>
@@ -93,7 +92,6 @@ class AppUser {
   String get backendRole => isAdmin ? 'Admin' : 'User';
 
   bool canAccessArea(Area area) {
-    if (hasAdminOverride) return true;
     if (!isApproved) return false;
     if (!area.active) return false;
     if (area.revokedUserIds.contains(id)) return false;
@@ -145,7 +143,6 @@ class AppUser {
   }
 
   bool canAccessRegisteredArea(Area area) {
-    if (hasAdminOverride) return true;
     if (!isRegisteredForArea(area)) return false;
     return canAccessArea(area);
   }

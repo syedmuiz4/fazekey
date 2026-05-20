@@ -7,6 +7,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
 import '../models/app_user.dart';
+import '../providers/alert_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/face_provider.dart';
 import '../widgets/face_overlay.dart';
@@ -272,6 +273,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       if (user == null) return;
                       final faceProvider = context.read<FaceProvider>();
                       final authProvider = context.read<AuthProvider>();
+                      final alertProvider = context.read<AlertProvider>();
                       final modelReady =
                           _modelReady ||
                           await _ensureModelReadyAfterFrame(faceProvider);
@@ -285,9 +287,9 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       _isProcessing = true;
                       _setStateAfterFrame(() => _busy = true);
                       await _disposeCamera();
-                      final registrationUid = selectedUser == null
-                          ? FirebaseAuth.instance.currentUser?.uid
-                          : selectedUser.id;
+                      final registrationUid = user.id.trim().isNotEmpty
+                          ? user.id
+                          : FirebaseAuth.instance.currentUser?.uid;
                       if (registrationUid == null ||
                           registrationUid.trim().isEmpty) {
                         if (mounted) {
@@ -308,6 +310,15 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                       );
                       await authProvider.refreshProfile();
                       if (ok && mounted) {
+                        if (selectedUser != null) {
+                          unawaited(
+                            alertProvider.raiseIntrusionAlert(
+                              title: 'Face Verified',
+                              body: '${user.name} completed face verification.',
+                              severity: 'Info',
+                            ),
+                          );
+                        }
                         SchedulerBinding.instance.addPostFrameCallback((_) {
                           if (!mounted) return;
                           final navigator = Navigator.of(context);

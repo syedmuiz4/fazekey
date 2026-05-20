@@ -1,15 +1,32 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../constants/command_center_options.dart';
 import '../models/access_log.dart';
 import '../models/access_grant.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
 import '../models/incident_report.dart';
+import '../models/room_access_record.dart';
+import '../models/room_access_request.dart';
 import '../models/system_settings.dart';
+import 'local_database_service.dart';
+
+class RoomSessionChange {
+  const RoomSessionChange({
+    required this.allowed,
+    this.activeSession,
+    this.message = '',
+  });
+
+  final bool allowed;
+  final RoomAccessRecord? activeSession;
+  final String message;
+}
 
 class FirebaseService {
   FirebaseService({FirebaseAuth? auth, FirebaseFirestore? firestore})
@@ -248,7 +265,28 @@ class FirebaseService {
     return user;
   }
 
-  Future<void> deleteManagedUser(String id) async => userRef(id).delete();
+  Future<void> deleteManagedUser(String id) async {
+    final userId = id.trim();
+    if (userId.isEmpty) return;
+    final grants = await accessGrantsRef
+        .where('userId', isEqualTo: userId)
+        .get();
+    final areas = await firestore.collection('areas').get();
+    final batch = firestore.batch()
+      ..delete(userRef(userId))
+      ..delete(activeRoomSessionsRef.doc(userId));
+    for (final grant in grants.docs) {
+      batch.delete(grant.reference);
+    }
+    for (final area in areas.docs) {
+      batch.set(area.reference, {
+        'allowedUserIds': FieldValue.arrayRemove([userId]),
+        'revokedUserIds': FieldValue.arrayRemove([userId]),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
 
   Future<void> approveUserIdentity(String userId) {
     return userRef(userId).set({
@@ -302,6 +340,7 @@ class FirebaseService {
     required Area area,
     required DateTime startAt,
     required DateTime endAt,
+    bool approveUser = true,
   }) async {
     if (!endAt.isAfter(startAt)) {
       throw Exception('Access end date must be after the start date.');
@@ -327,9 +366,41 @@ class FirebaseService {
       'room': _primaryRoom(assignedRooms),
       'rooms': assignedRooms,
       'permittedZones': assignedRooms,
-      'status': 'approved',
+      if (approveUser) 'status': 'approved',
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<void> revokeUserRoomAssignment({
+    required AppUser user,
+    required Area area,
+  }) async {
+    final roomKeys = {
+      area.id,
+      ..._areaRoomKeys(area),
+    }.where((value) => value.trim().isNotEmpty).map(_accessKey).toSet();
+    final remainingRooms = user.assignedRooms
+        .where((room) => !roomKeys.contains(_accessKey(room)))
+        .toList();
+
+    final grants = await accessGrantsRef
+        .where('userId', isEqualTo: user.id)
+        .where('areaId', isEqualTo: area.id)
+        .get();
+    final batch = firestore.batch();
+    batch.set(userRef(user.id), {
+      'room': _primaryRoom(remainingRooms),
+      'rooms': remainingRooms,
+      'permittedZones': remainingRooms,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    for (final doc in grants.docs) {
+      batch.set(doc.reference, {
+        'active': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
   }
 
   Future<void> deactivateAccessGrant(String grantId) {
@@ -344,24 +415,6 @@ class FirebaseService {
     required Area area,
     required DateTime moment,
   }) async {
-    if (user.hasAdminOverride) {
-      return AccessGrantEvaluation(
-        granted: true,
-        expired: false,
-        grant: AccessGrant(
-          id: 'admin_override',
-          userId: user.id,
-          userName: user.name,
-          userPosition: user.roleLabel,
-          areaId: area.id,
-          areaName: _areaRoomLabel(area),
-          startAt: DateTime(2000),
-          endAt: DateTime(2100),
-          active: true,
-          createdAt: DateTime.now(),
-        ),
-      );
-    }
     final snap = await accessGrantsRef
         .where('userId', isEqualTo: user.id)
         .where('areaId', isEqualTo: area.id)
@@ -418,14 +471,14 @@ class FirebaseService {
     }, SetOptions(merge: true));
   }
 
-  Future<void> revokeUserAccess(String userId) {
-    return userRef(userId).set({
+  Future<void> revokeUserAccess(String userId) async {
+    await userRef(userId).set({
       'room': '',
       'rooms': const <String>[],
       'permittedZones': const <String>[],
-      'status': 'pending',
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    await activeRoomSessionsRef.doc(userId.trim()).delete().catchError((_) {});
   }
 
   Future<void> revokeUserFromArea({
@@ -499,18 +552,430 @@ class FirebaseService {
     await userRef(userId).set({
       'hasFace': true,
       'faceEmbedding': embedding,
+      'biometricUid': userId,
+      'status': 'approved',
       'photoUrl': ?photoUrl,
       'faceUpdatedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<LocalFaceMatch?> findNearestRemoteFace(
+    List<double> embedding, {
+    double threshold = 1.2,
+  }) async {
+    final snap = await firestore
+        .collection('users')
+        .where('hasFace', isEqualTo: true)
+        .get();
+    LocalFaceMatch? best;
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final raw = data['faceEmbedding'];
+      if (raw is! Iterable) continue;
+      final stored = raw
+          .map((value) => value is num ? value.toDouble() : null)
+          .whereType<double>()
+          .toList(growable: false);
+      if (stored.length != embedding.length) continue;
+      final distance = _euclideanDistance(embedding, stored);
+      if (best == null || distance < best.distance) {
+        best = LocalFaceMatch(
+          userId: doc.id,
+          name: (data['name'] ?? '').toString(),
+          distance: distance,
+        );
+      }
+    }
+    if (best == null || best.distance > threshold) return null;
+    return best;
+  }
+
+  Future<AppUser?> resolveBiometricUser(String biometricUid) async {
+    final uid = biometricUid.trim();
+    if (uid.isEmpty) return null;
+    final direct = await getUser(uid);
+    if (direct != null) return direct;
+
+    for (final field in const [
+      'biometricUid',
+      'authUid',
+      'uid',
+      'faceUserId',
+      'identityNumber',
+    ]) {
+      final snap = await firestore
+          .collection('users')
+          .where(field, isEqualTo: uid)
+          .limit(1)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        final doc = snap.docs.first;
+        await doc.reference.set({
+          'biometricUid': uid,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        return AppUser.fromMap(doc.id, doc.data());
+      }
+    }
+
+    final account = auth.currentUser;
+    final email = account?.email?.trim();
+    if (account?.uid == uid && email != null && email.isNotEmpty) {
+      final byEmail = await getUserByEmail(email);
+      if (byEmail != null) {
+        await userRef(byEmail.id).set({
+          'biometricUid': uid,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        return byEmail;
+      }
+    }
+    return null;
+  }
+
+  Future<void> syncBiometricUid({
+    required String userId,
+    required String biometricUid,
+  }) {
+    final profileId = userId.trim();
+    final uid = biometricUid.trim();
+    if (profileId.isEmpty || uid.isEmpty) return Future.value();
+    return userRef(profileId).set({
+      'biometricUid': uid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> recordAppLogin(AppUser user, {String method = 'password'}) {
+    return firestore.collection('appAuthRecords').add({
+      'userId': user.id,
+      'userName': user.name.trim().isEmpty ? user.id : user.name.trim(),
+      'email': user.email.trim(),
+      'event': 'login',
+      'method': method,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> recordAppLogout(AppUser user, {String method = 'app'}) {
+    return firestore.collection('appAuthRecords').add({
+      'userId': user.id,
+      'userName': user.name.trim().isEmpty ? user.id : user.name.trim(),
+      'email': user.email.trim(),
+      'event': 'logout',
+      'method': method,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  CollectionReference<Map<String, dynamic>> get roomAccessRecordsRef =>
+      firestore.collection('roomAccessRecords');
+
+  CollectionReference<Map<String, dynamic>> get activeRoomSessionsRef =>
+      firestore.collection('activeRoomSessions');
+
+  CollectionReference<Map<String, dynamic>> get roomAccessRequestsRef =>
+      firestore.collection('roomAccessRequests');
+
+  Stream<List<RoomAccessRequest>> watchRoomAccessRequests() {
+    return roomAccessRequestsRef
+        .orderBy('createdAt', descending: true)
+        .limit(50)
+        .snapshots()
+        .map(
+          (snap) => snap.docs
+              .map((doc) => RoomAccessRequest.fromMap(doc.id, doc.data()))
+              .toList(),
+        );
+  }
+
+  Future<void> createRoomAccessRequest({
+    required AppUser user,
+    required Area area,
+    required String areaName,
+  }) async {
+    final existing = await roomAccessRequestsRef
+        .where('userId', isEqualTo: user.id)
+        .where('areaId', isEqualTo: area.id)
+        .where('status', isEqualTo: 'open')
+        .limit(1)
+        .get();
+    if (existing.docs.isNotEmpty) return;
+    final request = RoomAccessRequest(
+      id: '',
+      userId: user.id,
+      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+      areaId: area.id,
+      areaName: areaName,
+      status: 'open',
+      createdAt: DateTime.now(),
+    );
+    await roomAccessRequestsRef.add(request.toMap());
+  }
+
+  Future<void> decideRoomAccessRequest({
+    required RoomAccessRequest request,
+    required bool allowed,
+    Duration duration = const Duration(hours: 8),
+  }) async {
+    final user = await getUser(request.userId);
+    final areaSnap = await firestore
+        .collection('areas')
+        .doc(request.areaId)
+        .get();
+    final areaData = areaSnap.data();
+    final area = areaData == null
+        ? commandCenterAreas[request.areaId]
+        : Area.fromMap(areaSnap.id, areaData);
+    if (allowed && user != null && area != null) {
+      final now = DateTime.now();
+      await grantRoomAccess(
+        user: user,
+        area: area,
+        startAt: now,
+        endAt: now.add(duration),
+      );
+    }
+    await roomAccessRequestsRef.doc(request.id).set({
+      'status': allowed ? 'allowed' : 'denied',
+      'decidedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> cancelRoomAccessRequest(String requestId) {
+    final id = requestId.trim();
+    if (id.isEmpty) return Future.value();
+    return roomAccessRequestsRef.doc(id).set({
+      'status': 'cancelled',
+      'cancelledAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Stream<List<RoomAccessRecord>> watchRoomAccessRecords({int limit = 500}) {
+    return roomAccessRecordsRef
+        .orderBy('timestamp', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map(
+          (snap) => snap.docs
+              .map((doc) => RoomAccessRecord.fromMap(doc.id, doc.data()))
+              .toList(),
+        );
+  }
+
+  Stream<List<RoomAccessRecord>> watchActiveRoomSessions() {
+    return activeRoomSessionsRef.snapshots().map(
+      (snap) => snap.docs
+          .map((doc) => RoomAccessRecord.fromMap(doc.id, doc.data()))
+          .toList(),
+    );
+  }
+
+  Future<RoomAccessRecord?> getActiveRoomSession(String userId) async {
+    final id = userId.trim();
+    if (id.isEmpty) return null;
+    final snap = await activeRoomSessionsRef.doc(id).get();
+    final data = snap.data();
+    if (!snap.exists || data == null) return null;
+    return RoomAccessRecord.fromMap(snap.id, data);
+  }
+
+  Future<RoomSessionChange> recordRoomEntry({
+    required AppUser user,
+    required Area area,
+    required String areaName,
+  }) async {
+    final active = await getActiveRoomSession(user.id);
+    if (active != null) {
+      return RoomSessionChange(
+        allowed: false,
+        activeSession: active,
+        message: 'Locked: Current session active elsewhere',
+      );
+    }
+    final now = DateTime.now();
+    final sessionId = '${user.id}_${now.microsecondsSinceEpoch}';
+    final record = RoomAccessRecord(
+      id: sessionId,
+      sessionId: sessionId,
+      userId: user.id,
+      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+      areaId: area.id,
+      areaName: areaName,
+      event: 'entry',
+      timestamp: now,
+      reason: 'Biometric entry verified',
+    );
+    final batch = firestore.batch();
+    batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
+    batch.set(activeRoomSessionsRef.doc(user.id), record.toMap());
+    if (area.id.trim().isNotEmpty) {
+      batch.set(firestore.collection('areas').doc(area.id), {
+        'currentOccupancy': FieldValue.increment(1),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+    return const RoomSessionChange(allowed: true);
+  }
+
+  Future<RoomSessionChange> recordRoomExit({
+    required AppUser user,
+    required Area area,
+    required String areaName,
+    String reason = 'Biometric exit verified',
+  }) async {
+    final active = await getActiveRoomSession(user.id);
+    if (active == null) {
+      return const RoomSessionChange(
+        allowed: false,
+        message: 'No active room session found',
+      );
+    }
+    if (active.areaId != area.id) {
+      return RoomSessionChange(
+        allowed: false,
+        activeSession: active,
+        message: 'Locked: Current session active elsewhere',
+      );
+    }
+    final now = DateTime.now();
+    final recordId = '${active.sessionId}_exit_${now.microsecondsSinceEpoch}';
+    final record = RoomAccessRecord(
+      id: recordId,
+      sessionId: active.sessionId,
+      userId: user.id,
+      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+      areaId: area.id,
+      areaName: areaName,
+      event: 'exit',
+      timestamp: now,
+      reason: reason,
+    );
+    final batch = firestore.batch();
+    batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
+    batch.delete(activeRoomSessionsRef.doc(user.id));
+    if (area.id.trim().isNotEmpty) {
+      batch.set(firestore.collection('areas').doc(area.id), {
+        'currentOccupancy': FieldValue.increment(-1),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+    return const RoomSessionChange(allowed: true);
+  }
+
+  Future<void> closeActiveRoomSessionForUser(AppUser user) async {
+    final active = await getActiveRoomSession(user.id);
+    if (active == null) return;
+    final now = DateTime.now();
+    final record = RoomAccessRecord(
+      id: '${active.sessionId}_logout_${now.microsecondsSinceEpoch}',
+      sessionId: active.sessionId,
+      userId: user.id,
+      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+      areaId: active.areaId,
+      areaName: active.areaName,
+      event: 'exit',
+      timestamp: now,
+      reason: 'Application logout closed active room session',
+    );
+    final batch = firestore.batch();
+    batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
+    batch.delete(activeRoomSessionsRef.doc(user.id));
+    if (active.areaId.trim().isNotEmpty) {
+      batch.set(firestore.collection('areas').doc(active.areaId), {
+        'currentOccupancy': FieldValue.increment(-1),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
   }
 
   Future<void> signOut() => auth.signOut();
 
-  Future<void> sendPasswordResetEmail(String email) {
-    return _authCall(() => auth.sendPasswordResetEmail(email: email.trim()));
+  Future<void> sendPasswordResetEmail(String email) async {
+    final target = email.trim();
+    if (target.isEmpty) {
+      throw Exception('A registered email address is required.');
+    }
+    final user = await getUserByEmail(target);
+    final displayName = user?.name.trim().isNotEmpty == true
+        ? user!.name.trim()
+        : '[User Name]';
+    const resetUrl = 'https://fazekey.com/reset-password?token=xyz123';
+    await firestore.collection('passwordResetRequests').add({
+      'userId': user?.id ?? '',
+      'userName': displayName,
+      'email': target,
+      'status': 'open',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    final body =
+        '🔐 FAZEKEY PASSWORD RESET\r\n\r\n'
+        'Hi $displayName,\r\n\r\n'
+        'We received a request to reset your Fazekey password.\r\n\r\n'
+        '                 🔒 RESET PASSWORD\r\n\r\n'
+        'Or copy this link:\r\n'
+        '$resetUrl\r\n\r\n'
+        'This link will expire in 1 hour.\r\n\r\n'
+        'If you didn\'t request this, please ignore this email.\r\n\r\n'
+        '----------------------------------------\r\n'
+        'Thanks,\r\n'
+        '**Fazekey Security Team**\r\n\r\n'
+        '⚠️ Never share this email with anyone.';
+    await _launchMailto(
+      target,
+      subject: 'FAZEKEY Password Reset',
+      body: body,
+      requireOpened: false,
+    );
   }
 
-  Future<void> sendSetupEmail(String email, {AppUser? user}) async {
+  Future<void> createSupportRequest({
+    required AppUser user,
+    required String subject,
+    required String message,
+    required String contact,
+  }) async {
+    final cleanSubject = subject.trim();
+    final cleanMessage = message.trim();
+    final cleanContact = contact.trim();
+    if (cleanSubject.isEmpty || cleanMessage.isEmpty || cleanContact.isEmpty) {
+      throw Exception('Subject, message, and contact are required.');
+    }
+    final settings = await getSystemSettings();
+    final adminEmail = settings.administratorEmail.trim().isEmpty
+        ? 'administrator@campus-access.local'
+        : settings.administratorEmail.trim();
+    await firestore.collection('supportRequests').add({
+      'userId': user.id,
+      'userName': user.name,
+      'email': user.email,
+      'contact': cleanContact,
+      'subject': cleanSubject,
+      'message': cleanMessage,
+      'status': 'open',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    final body =
+        'FAZEKEY HELP & SUPPORT\r\n\r\n'
+        'User: ${user.name}\r\n'
+        'Email: ${user.email}\r\n'
+        'Contact: $cleanContact\r\n\r\n'
+        'Subject: $cleanSubject\r\n\r\n'
+        '$cleanMessage';
+    await _launchMailto(
+      adminEmail,
+      subject: 'FAZEKEY Support Request - $cleanSubject',
+      body: body,
+      requireOpened: false,
+    );
+  }
+
+  Future<void> sendSetupEmail(
+    String email, {
+    AppUser? user,
+    String temporaryPassword = 'fx_9A3k7W',
+  }) async {
     final target = email.trim();
     if (target.isEmpty) {
       throw Exception('A registered email address is required.');
@@ -520,31 +985,53 @@ class FirebaseService {
         ? profile!.name.trim()
         : 'FAZEKEY user';
     final roleLabel = profile?.roleLabel ?? 'User';
-    final room = profile?.room.trim();
-    final roomLine = room == null || room.isEmpty
-        ? 'Your assigned room will appear in your User ID after setup.'
-        : 'Assigned room: $room';
+    final rooms = profile?.assignedRooms ?? const <String>[];
+    final roomLine = rooms.isEmpty
+        ? 'Authorized zones: Pending assignment'
+        : 'Authorized zones: ${rooms.join(', ')}';
     final credentialLines = [
       'Registered email: $target',
+      'Temporary password: $temporaryPassword',
       if (profile?.identityNumber.trim().isNotEmpty == true)
         'User ID: ${profile!.identityNumber.trim()}',
       'Role: $roleLabel',
       roomLine,
     ].join('\r\n');
     final body =
-        'Hello $displayName,\r\n\r\n'
-        'Your $roleLabel User ID has been created in FAZEKEY.\r\n\r\n'
+        'Your Fazekey access is live, $displayName. Use the temporary password below to unlock your first door.\r\n\r\n'
+        'âš ï¸ This password expires in 24 hours.\r\n\r\n'
         '$credentialLines\r\n\r\n'
-        'Open the app, sign in with your registered email, and complete Identity Enrollment to activate Face Identity access. Your verified face scan will grant access only to your pre-registered room under FAZEKEY RBAC policy.\r\n\r\n'
+        'Next steps:\r\n'
+        '1. Open FAZEKEY and sign in with the registered email.\r\n'
+        '2. Complete Face Registration when prompted by the administrator.\r\n'
+        '3. Access is limited to the authorized zones listed above.\r\n\r\n'
+        'If you did not expect this account, contact your FAZEKEY administrator before signing in.\r\n\r\n'
         'Regards,\r\n'
-        'FAZEKEY Credentialing Services';
-    final uri = Uri(
-      scheme: 'mailto',
-      path: target,
-      queryParameters: {'subject': 'FAZEKEY Access Enrollment', 'body': body},
+        'FAZEKEY Security Operations';
+    final opened = await _launchMailto(
+      target,
+      subject: 'FAZEKEY Security Portal Credentials',
+      body: body,
+    );
+    if (!opened) throw Exception('Unable to open a local email application.');
+  }
+
+  Future<bool> _launchMailto(
+    String email, {
+    required String subject,
+    required String body,
+    bool requireOpened = true,
+  }) async {
+    final uri = Uri.parse(
+      'mailto:${Uri.encodeComponent(email)}'
+      '?subject=${Uri.encodeComponent(subject)}'
+      '&body=${Uri.encodeComponent(body)}',
     );
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!opened) throw Exception('Unable to open a local email application.');
+    if (requireOpened && !opened) {
+      throw Exception('Unable to open a local email application.');
+    }
+    return opened;
   }
 
   Stream<List<Area>> watchAreas() => firestore
@@ -560,13 +1047,22 @@ class FirebaseService {
       firestore.collection('areas').doc(id).delete();
 
   Future<void> ensureSampleAreas() async {
-    for (final entry in _sampleAreas.entries) {
-      final ref = firestore.collection('areas').doc(entry.key);
-      final snap = await ref.get();
-      if (!snap.exists) {
-        await ref.set(entry.value.toMap());
+    final allowedIds = commandCenterAreas.keys.toSet();
+    final snap = await firestore.collection('areas').get();
+    final batch = firestore.batch();
+    for (final doc in snap.docs) {
+      if (!allowedIds.contains(doc.id)) {
+        batch.delete(doc.reference);
       }
     }
+    for (final entry in commandCenterAreas.entries) {
+      batch.set(
+        firestore.collection('areas').doc(entry.key),
+        entry.value.toMap(),
+        SetOptions(merge: true),
+      );
+    }
+    await batch.commit();
   }
 
   Future<void> updateArea(Area area) async {
@@ -710,9 +1206,6 @@ class FirebaseService {
 
   Future<void> addLog(AccessLog log) async {
     await firestore.collection('accessLogs').doc(log.id).set(log.toMap());
-    if (log.granted) {
-      await updateAreaOccupancy(log.areaId, 1);
-    }
   }
 
   Future<void> addIncidentReport({
@@ -894,6 +1387,16 @@ class FirebaseService {
     }.map(_accessKey).where((value) => value.isNotEmpty).toSet();
   }
 
+  static double _euclideanDistance(List<double> a, List<double> b) {
+    if (a.length != b.length) return double.infinity;
+    var sum = 0.0;
+    for (var i = 0; i < a.length; i++) {
+      final diff = a[i] - b[i];
+      sum += diff * diff;
+    }
+    return math.sqrt(sum);
+  }
+
   AppUser _fallbackUser(User user) => AppUser(
     id: user.uid,
     name: user.displayName ?? '',
@@ -912,49 +1415,4 @@ class FirebaseService {
     createdAt: DateTime.now(),
     hasFace: false,
   );
-
-  static final Map<String, Area> _sampleAreas = {
-    'sample_level_1_access_lab': Area(
-      id: 'sample_level_1_access_lab',
-      name: 'Level 1 - Access Lab',
-      location: 'FSKTM',
-      floor: 'Level 1',
-      roomNumber: '31',
-      active: true,
-      createdAt: DateTime(2026),
-      allowedDepartments: const [
-        'Software Engineering',
-        'Information Security',
-      ],
-      allowedRoles: const ['User', 'Admin'],
-      currentOccupancy: 0,
-      capacity: 25,
-    ),
-    'sample_level_2_research_suite': Area(
-      id: 'sample_level_2_research_suite',
-      name: 'Level 2 - Research Suite',
-      location: 'FSKTM',
-      floor: 'Level 2',
-      roomNumber: '32',
-      active: true,
-      createdAt: DateTime(2026, 1, 2),
-      allowedDepartments: const ['Multimedia', 'Information Security'],
-      allowedRoles: const ['User', 'Admin'],
-      currentOccupancy: 0,
-      capacity: 25,
-    ),
-    'sample_level_3_it_room': Area(
-      id: 'sample_level_3_it_room',
-      name: 'IT Room',
-      location: 'FSKTM',
-      floor: 'Level 3',
-      roomNumber: '33',
-      active: true,
-      createdAt: DateTime(2026, 1, 3),
-      allowedDepartments: const ['Information Security'],
-      allowedRoles: const ['Admin', 'User'],
-      currentOccupancy: 0,
-      capacity: 10,
-    ),
-  };
 }

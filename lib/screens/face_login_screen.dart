@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:image/image.dart' as img;
 import 'package:provider/provider.dart';
 
 import '../models/access_log.dart';
+import '../models/app_user.dart';
 import '../models/area.dart';
 import '../models/system_settings.dart';
 import '../providers/area_provider.dart';
@@ -16,11 +20,12 @@ import '../providers/face_provider.dart';
 import '../providers/log_provider.dart';
 import '../providers/system_provider.dart';
 import '../services/firebase_service.dart';
+import '../widgets/corporate_chrome.dart';
 import '../widgets/face_overlay.dart';
-import '../widgets/primary_button.dart';
 import 'access_result_screen.dart';
 import 'dashboard_screen.dart';
 import 'login_screen.dart';
+import 'user_dashboard_screen.dart';
 
 class FaceLoginScreen extends StatefulWidget {
   const FaceLoginScreen({super.key});
@@ -32,7 +37,8 @@ class FaceLoginScreen extends StatefulWidget {
 
 class _FaceLoginScreenState extends State<FaceLoginScreen> {
   static const _serverRoomName = 'Server Room';
-  static const _itLabName = 'IT Lab';
+  static const _ictOfficeName = 'ICT Office';
+  static const _minimumFrameLuminance = 72.0;
 
   CameraController? _controller;
   FaceProvider? _faceProvider;
@@ -99,9 +105,74 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     final alertProvider = context.read<AlertProvider>();
     final authProvider = context.read<AuthProvider>();
     final firebase = context.read<FirebaseService>();
+    final sessionAction = _scannerSessionAction();
+    final appLoginOnly = _isAppFaceLogin();
+    final scanRoomName = _scannerRoomDisplayLabel();
     AccessLog? pendingResultLog;
 
     try {
+      final controller = _controller;
+      if (controller == null ||
+          !controller.value.isInitialized ||
+          controller.value.isTakingPicture) {
+        _isProcessing = false;
+        if (mounted) _setStateAfterFrame(() => _busy = false);
+        return;
+      }
+
+      final file = await controller.takePicture();
+      final snapshotPath = file.path;
+      final hasSafeLight = await _hasSafeFrameLuminance(snapshotPath);
+      if (!hasSafeLight) {
+        _setStateAfterFrame(() {
+          _error =
+              'Lighting is too low for secure face verification. Move to a brighter area and try again.';
+          _busy = false;
+        });
+        return;
+      }
+
+      _recognitionInFlight = true;
+      final localMatch = await faceProvider.identifyLocalMatch(file);
+      _isProcessing = true;
+      await _releaseCameraForNavigation();
+
+      final user = await faceProvider.resolveLocalMatch(localMatch);
+
+      if (appLoginOnly) {
+        if (user == null || !user.isApproved || !user.hasFace) {
+          final log = faceProvider.buildLog(
+            user: user,
+            area: scanArea,
+            areaName: 'Application Face Login',
+            status: 'denied',
+            reason: user == null
+                ? 'Face not recognized'
+                : !user.hasFace
+                ? 'Face profile is not enrolled'
+                : 'Account needs admin review',
+            snapshotPath: snapshotPath,
+          );
+          pendingResultLog = log;
+          await logProvider.record(
+            log,
+            firestoreLogging: system.monitoringWindowLogging,
+          );
+          if (!mounted) return;
+          _replaceWithAccessResult(user: null, log: log);
+          return;
+        }
+        authProvider.completeFaceLogin(user);
+        unawaited(
+          firebase
+              .recordAppLogin(user, method: 'face_biometric')
+              .catchError((_) {}),
+        );
+        if (!mounted) return;
+        await _showSuccessAndNavigate(user);
+        return;
+      }
+
       if (system.globalLockdown) {
         await _denyAccess(
           faceProvider: faceProvider,
@@ -117,23 +188,43 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         return;
       }
 
-      final controller = _controller;
-      if (controller == null ||
-          !controller.value.isInitialized ||
-          controller.value.isTakingPicture) {
-        _isProcessing = false;
-        if (mounted) _setStateAfterFrame(() => _busy = false);
+      if (sessionAction == 'exit') {
+        final hasExitIdentity = user != null && user.isApproved && user.hasFace;
+        final exitChange = hasExitIdentity
+            ? await firebase.recordRoomExit(
+                user: user,
+                area: scanArea,
+                areaName: scanRoomName,
+              )
+            : null;
+        final exitGranted = exitChange?.allowed == true;
+        final exitReason = !hasExitIdentity
+            ? 'No permission access'
+            : exitGranted
+            ? 'Exit registered for $scanRoomName'
+            : exitChange?.message ?? 'No permission access';
+        final log = faceProvider.buildLog(
+          user: user,
+          area: scanArea,
+          areaName: scanRoomName,
+          status: exitGranted ? 'granted' : 'locked',
+          reason: exitReason,
+          snapshotPath: exitGranted ? null : snapshotPath,
+        );
+        pendingResultLog = log;
+        await logProvider.record(
+          log,
+          firestoreLogging: system.monitoringWindowLogging,
+        );
+        if (!mounted) return;
+        if (exitGranted) {
+          await _showSuccessAndNavigate(user!, log: log);
+        } else {
+          _replaceWithAccessResult(user: null, log: log);
+        }
         return;
       }
 
-      final file = await controller.takePicture();
-      final snapshotPath = file.path;
-
-      _recognitionInFlight = true;
-      final user = await faceProvider.identify(file);
-      _isProcessing = true;
-      await _releaseCameraForNavigation();
-      final adminOverride = user?.hasAdminOverride == true;
       final grantEvaluation = user == null
           ? null
           : await firebase.evaluateAccessGrant(
@@ -142,53 +233,61 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
               moment: DateTime.now(),
             );
       final verifiedArea = grantEvaluation?.granted == true ? scanArea : null;
-      final accessArea = adminOverride ? scanArea : verifiedArea ?? scanArea;
-      final adminApproved = user != null && (adminOverride || user.isApproved);
-      final timingDenied = system.shouldDenyScanForRole(
-        user?.role,
-        DateTime.now(),
-      );
+      final accessArea = verifiedArea ?? scanArea;
+      final adminApproved = user != null && user.isApproved;
+      final faceRegistered = user != null && user.hasFace;
+      final timingDenied =
+          _hasExplicitTemporalPolicy(system) &&
+          system.shouldDenyScanAt(DateTime.now());
       final registeredForScanner =
           user != null && user.isRegisteredForArea(scanArea);
       final areaAllowed =
           user != null &&
-          (adminOverride ||
-              (verifiedArea != null &&
-                  registeredForScanner &&
-                  user.canAccessRegisteredArea(scanArea)));
-      final hasAccess =
-          user != null && adminApproved && !timingDenied && areaAllowed;
-      if (hasAccess) {
-        authProvider.completeFaceLogin(user);
+          verifiedArea != null &&
+          registeredForScanner &&
+          user.canAccessRegisteredArea(scanArea);
+      final temporalAllowed = !timingDenied;
+      var hasAccess =
+          user != null &&
+          adminApproved &&
+          faceRegistered &&
+          temporalAllowed &&
+          areaAllowed;
+      var lockReason = '';
+      if (user != null) {
+        final activeSession = await firebase.getActiveRoomSession(user.id);
+        if (activeSession != null) {
+          hasAccess = false;
+          lockReason = 'Locked: Current session active elsewhere';
+        }
       }
-      final matchedUid = faceProvider.lastMatchedUserId;
       final reason = user == null
-          ? matchedUid == null
-                ? (faceProvider.error ?? 'Unknown face')
-                : 'Biometric UID $matchedUid was not found in Firestore users collection.'
+          ? 'No permission access'
           : hasAccess
-          ? adminOverride
-                ? 'Admin override verified for ${_areaName(accessArea)}'
-                : 'Face Identity verified for ${_areaName(verifiedArea)}'
+          ? 'Face Identity verified for ${_areaName(verifiedArea)}'
+          : lockReason.isNotEmpty
+          ? lockReason
           : !adminApproved
-          ? 'Verification Required by Admin'
-          : timingDenied
-          ? 'Access denied outside the active access window'
+          ? 'No permission access'
+          : !faceRegistered
+          ? 'Face profile is not enrolled'
+          : !temporalAllowed
+          ? 'No permission access'
           : grantEvaluation?.expired == true
-          ? 'Access Expired'
+          ? 'No permission access'
           : !registeredForScanner
-          ? 'Unauthorized zone: ${user.name} is not assigned to scanner room ${_areaName(scanArea)}'
+          ? 'No permission access'
           : verifiedArea == null
-          ? grantEvaluation?.pending == true
-                ? 'Access window starts ${_formatGrantDate(grantEvaluation!.grant!.startAt)}'
-                : 'No active temporal access window for scanner room ${_areaName(scanArea)}'
-          : 'RBAC denied: ${user.roleLabel} is not authorized for scanner room ${_areaName(scanArea)}';
+          ? 'No permission access'
+          : 'No permission access';
       final log = faceProvider.buildLog(
         user: user,
         area: accessArea,
         areaName: _areaName(accessArea),
         status: hasAccess
             ? 'granted'
+            : lockReason.isNotEmpty
+            ? 'locked'
             : grantEvaluation?.expired == true
             ? 'expired'
             : 'denied',
@@ -200,6 +299,57 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         log,
         firestoreLogging: system.monitoringWindowLogging,
       );
+      if (!hasAccess &&
+          user != null &&
+          adminApproved &&
+          temporalAllowed &&
+          lockReason.isEmpty) {
+        await firebase.createRoomAccessRequest(
+          user: user,
+          area: scanArea,
+          areaName: scanRoomName,
+        );
+        if (mounted) {
+          unawaited(
+            alertProvider.raiseIntrusionAlert(
+              title: 'Room Access Request',
+              body: '${user.name} requested entry to $scanRoomName.',
+              severity: 'Info',
+            ),
+          );
+        }
+      }
+      if (hasAccess) {
+        final verifiedUser = user!;
+        final entryChange = await firebase.recordRoomEntry(
+          user: verifiedUser,
+          area: scanArea,
+          areaName: scanRoomName,
+        );
+        if (!entryChange.allowed) {
+          final lockedLog = faceProvider.buildLog(
+            user: verifiedUser,
+            area: scanArea,
+            areaName: scanRoomName,
+            status: 'locked',
+            reason: entryChange.message,
+            snapshotPath: snapshotPath,
+          );
+          await logProvider.record(
+            lockedLog,
+            firestoreLogging: system.monitoringWindowLogging,
+          );
+          if (!mounted) return;
+          _replaceWithAccessResult(user: null, log: lockedLog);
+          return;
+        }
+        authProvider.completeFaceLogin(verifiedUser);
+        unawaited(
+          firebase
+              .recordAppLogin(verifiedUser, method: 'face_biometric')
+              .catchError((_) {}),
+        );
+      }
       if (!hasAccess && system.intrusionAlerts && mounted) {
         await alertProvider.raiseIntrusionAlert(
           title: 'Access Denied',
@@ -214,7 +364,11 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         }
       }
       if (!mounted) return;
-      _replaceWithAccessResult(user: hasAccess ? user : null, log: log);
+      if (hasAccess) {
+        await _showSuccessAndNavigate(user!, log: log);
+      } else {
+        _replaceWithAccessResult(user: null, log: log);
+      }
     } catch (e) {
       _isProcessing = true;
       await _releaseCameraForNavigation();
@@ -300,7 +454,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       if (_isRecognizedScannerRoom(area, _serverRoomName)) return area;
     }
     for (final area in active) {
-      if (_isRecognizedScannerRoom(area, _itLabName)) return area;
+      if (_isRecognizedScannerRoom(area, _ictOfficeName)) return area;
     }
     return active.isEmpty ? _fallbackServerRoom() : active.first;
   }
@@ -317,16 +471,87 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     return null;
   }
 
+  String _scannerRoomDisplayLabel() {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map<String, dynamic>) {
+      final value =
+          args['roomName'] ??
+          args['areaName'] ??
+          args['scannerRoomName'] ??
+          args['label'];
+      if (value != null && value.toString().trim().isNotEmpty) {
+        return value.toString().trim();
+      }
+    }
+    return _areaName(_activeAreaFromProvider());
+  }
+
+  String _scannerSessionAction() {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args is Map<String, dynamic>) {
+      final value = args['sessionAction'] ?? args['mode'] ?? args['event'];
+      final action = value?.toString().trim().toLowerCase();
+      if (action == 'exit' || action == 'logout') return 'exit';
+    }
+    return 'entry';
+  }
+
+  bool _isAppFaceLogin() {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    if (args == null) return true;
+    if (args is Map<String, dynamic>) {
+      final scannerKeys = [
+        'roomId',
+        'areaId',
+        'scannerRoomId',
+        'roomName',
+        'areaName',
+        'scannerRoomName',
+        'sessionAction',
+        'mode',
+        'event',
+      ];
+      return !scannerKeys.any(
+        (key) => args[key]?.toString().trim().isNotEmpty == true,
+      );
+    }
+    return false;
+  }
+
   String _triNormalize(String value) =>
       value.trim().toLowerCase().replaceAll(' ', '');
 
   bool _isRecognizedScannerRoom(Area area, String roomName) =>
       _triNormalize(_areaName(area)) == _triNormalize(roomName);
 
-  String _formatGrantDate(DateTime date) {
-    final month = date.month.toString().padLeft(2, '0');
-    final day = date.day.toString().padLeft(2, '0');
-    return '${date.year}-$month-$day';
+  bool _hasExplicitTemporalPolicy(SystemSettings system) {
+    if (!system.afterHoursAlerts) return false;
+    return system.afterHoursStart !=
+            SystemSettings.defaults().afterHoursStart ||
+        system.afterHoursEnd != SystemSettings.defaults().afterHoursEnd;
+  }
+
+  Future<bool> _hasSafeFrameLuminance(String imagePath) async {
+    try {
+      final bytes = await File(imagePath).readAsBytes();
+      final frame = img.decodeImage(bytes);
+      if (frame == null) return false;
+      final stepX = math.max(1, frame.width ~/ 48);
+      final stepY = math.max(1, frame.height ~/ 48);
+      var samples = 0;
+      var total = 0.0;
+      for (var y = 0; y < frame.height; y += stepY) {
+        for (var x = 0; x < frame.width; x += stepX) {
+          final pixel = frame.getPixel(x, y);
+          total += (0.2126 * pixel.r) + (0.7152 * pixel.g) + (0.0722 * pixel.b);
+          samples++;
+        }
+      }
+      if (samples == 0) return false;
+      return total / samples >= _minimumFrameLuminance;
+    } catch (_) {
+      return false;
+    }
   }
 
   Area _fallbackServerRoom() => Area(
@@ -411,14 +636,44 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
   void _replaceWithAccessResult({required Object? user, required Object? log}) {
     if (isNavigating) return;
     isNavigating = true;
+    final verifiedUser = user is AppUser ? user : null;
+    final dashboardUser = verifiedUser ?? context.read<AuthProvider>().user;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil(
         AccessResultScreen.route,
         (_) => false,
-        arguments: {'user': user, 'log': log},
+        arguments: {
+          'user': user,
+          'log': log,
+          'dashboardRoute': dashboardUser == null
+              ? LoginScreen.route
+              : dashboardUser.isAdmin
+              ? DashboardScreen.route
+              : UserDashboardScreen.route,
+          'backRoute': FaceLoginScreen.route,
+        },
       );
     });
+  }
+
+  Future<void> _showSuccessAndNavigate(AppUser user, {AccessLog? log}) async {
+    if (isNavigating) return;
+    isNavigating = true;
+    unawaited(_faceProvider?.closeDetector());
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      AccessResultScreen.route,
+      (_) => false,
+      arguments: {
+        'user': user,
+        'log': log,
+        'dashboardRoute': user.isAdmin
+            ? DashboardScreen.route
+            : UserDashboardScreen.route,
+        'backRoute': FaceLoginScreen.route,
+      },
+    );
   }
 
   Future<void> _handleFirestorePermissionDenied(
@@ -514,7 +769,6 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           child: Builder(
             builder: (context) {
               final lockedOut = settings.globalLockdown;
-              final timingLocked = settings.shouldDenyScanAt(DateTime.now());
               return Stack(
                 children: [
                   Positioned.fill(
@@ -559,7 +813,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
                   Positioned(
                     left: 20,
                     right: 20,
-                    top: 16,
+                    top: 14,
                     child: Row(
                       children: [
                         IconButton.filledTonal(
@@ -567,10 +821,10 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
                           icon: const Icon(Icons.arrow_back_rounded),
                         ),
                         const SizedBox(width: 12),
-                        const Expanded(
+                        Expanded(
                           child: Text(
-                            'Face Access',
-                            style: TextStyle(
+                            'Face Scan',
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 20,
                               fontWeight: FontWeight.w800,
@@ -585,41 +839,55 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
                     right: 20,
                     bottom: 24,
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (!lockedOut && timingLocked) ...[
-                          DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: .56),
-                              borderRadius: BorderRadius.circular(18),
-                            ),
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              child: Text(
-                                'Access window is closed. Admin verification remains available.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.white),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
                         if (_error != null || face.error != null)
-                          Text(
-                            _error ?? face.error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.redAccent),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              _error ?? face.error!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.redAccent),
+                            ),
                           ),
-                        const SizedBox(height: 12),
-                        PrimaryButton(
-                          label: lockedOut ? 'Access Denied' : 'Scan Face',
-                          loading: _busy || face.loading,
-                          icon: lockedOut
-                              ? Icons.lock_clock_rounded
-                              : Icons.center_focus_strong_rounded,
-                          onPressed: lockedOut ? null : () => _scan(settings),
+                        const _ScannerInstructions(),
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton(
+                            onPressed: (_busy || face.loading || lockedOut)
+                                ? null
+                                : () => _scan(settings),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: CorporateColors.teal,
+                              foregroundColor: const Color(0xFF02110F),
+                              padding: const EdgeInsets.symmetric(vertical: 18),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              textStyle: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            child: _busy || face.loading
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.4,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.verified_user_rounded),
+                                      SizedBox(width: 8),
+                                      Text('Verify'),
+                                    ],
+                                  ),
+                          ),
                         ),
                       ],
                     ),
@@ -629,6 +897,42 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
             },
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ScannerInstructions extends StatelessWidget {
+  const _ScannerInstructions();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _InstructionLine('Position your face inside the frame to verify'),
+        SizedBox(height: 5),
+        _InstructionLine('Hold still while the system performs the scan'),
+      ],
+    );
+  }
+}
+
+class _InstructionLine extends StatelessWidget {
+  const _InstructionLine(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      textAlign: TextAlign.center,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 15,
+        fontWeight: FontWeight.w800,
+        shadows: [Shadow(color: Colors.black, blurRadius: 14)],
       ),
     );
   }

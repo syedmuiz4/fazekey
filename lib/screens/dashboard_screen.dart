@@ -4,9 +4,11 @@ import 'dart:math' as math;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../constants/command_center_options.dart';
 import '../models/access_grant.dart';
 import '../models/access_log.dart';
 import '../models/app_user.dart';
@@ -14,14 +16,14 @@ import '../models/area.dart';
 import '../providers/alert_provider.dart';
 import '../providers/area_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/face_provider.dart';
 import '../providers/log_provider.dart';
-import '../providers/system_provider.dart';
 import '../services/firebase_service.dart';
 import '../services/security_report_service.dart';
 import '../widgets/app_background.dart';
+import '../widgets/corporate_chrome.dart';
 import '../widgets/glass_card.dart';
 import 'add_area_screen.dart';
-import 'face_login_screen.dart';
 import 'face_registration_screen.dart';
 import 'notifications_screen.dart';
 import 'welcome_screen.dart';
@@ -36,9 +38,43 @@ enum _RoomDetailView { settings, history }
 
 enum _ArchiveFilter { all, approvals, facePending, staff, students }
 
+class _AdminText {
+  const _AdminText(this.locale);
+
+  final String locale;
+
+  bool get _ms => locale == 'Malay';
+
+  String get dashboard => _ms ? 'Papan Pemuka' : 'Dashboard';
+  String get userDirectory => _ms ? 'Direktori Pengguna' : 'User Directory';
+  String get zoneControl => _ms ? 'Kawalan Zon' : 'Zone Control';
+  String get roomControl => _ms ? 'Kawalan Bilik' : 'Room Control';
+  String get accessLog => _ms ? 'Log Akses' : 'Access Log';
+  String get userArchive => _ms ? 'Arkib Data Pengguna' : 'User Data Archive';
+  String get settings => _ms ? 'Tetapan' : 'Settings';
+  String get signOut => _ms ? 'Log Keluar' : 'Sign Out';
+  String get linkedRooms => _ms ? 'Bilik Terpaut' : 'Linked Rooms';
+  String get myAccount => _ms ? 'Akaun Saya' : 'MY ACCOUNT';
+  String get display => _ms ? 'Paparan' : 'DISPLAY';
+  String get darkMode => _ms ? 'Mod Gelap' : 'Dark Mode';
+  String get language => _ms ? 'Bahasa' : 'Language';
+  String get changePassword => _ms ? 'Tukar Kata Laluan' : 'Change Password';
+  String get editEmail => _ms ? 'Edit Emel' : 'Edit Email';
+  String get close => _ms ? 'Tutup' : 'Close';
+  String get passwordSent => _ms
+      ? 'Emel tetapan semula kata laluan dihantar.'
+      : 'Password reset email sent.';
+  String get passwordFailed => _ms
+      ? 'Tidak dapat menghantar emel tetapan semula kata laluan.'
+      : 'Unable to send password reset email.';
+  String get editEmailNotice => _ms
+      ? 'Perubahan emel diurus melalui tetapan akaun pentadbir.'
+      : 'Email changes are managed through the administrator account settings.';
+}
+
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
-  static const route = '/dashboard';
+  static const route = '/admin_dashboard';
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -49,7 +85,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   _DashboardPage _page = _DashboardPage.command;
   _DirectoryMode _directoryMode = _DirectoryMode.all;
   int _entryTimelineLimit = 30;
-  int _registrationSignal = 0;
+  final int _registrationSignal = 0;
+  bool _darkMode = false;
+  String _language = 'English';
 
   @override
   void initState() {
@@ -66,64 +104,112 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final page = _page;
+    final text = _AdminText(_language);
+    final baseTheme = Theme.of(context);
+    final adminTheme = _darkMode
+        ? ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: CorporateColors.teal,
+              brightness: Brightness.dark,
+            ),
+            useMaterial3: true,
+          )
+        : baseTheme;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) _handleBackPressed();
       },
-      child: AppBackground(
-        child: Scaffold(
-          key: _dashboardScaffoldKey,
-          backgroundColor: Colors.transparent,
-          appBar: AppBar(
-            backgroundColor: Colors.transparent,
-            title: Text(_pageTitle(page)),
-            actions: [
-              _NotificationBell(
-                onTap: () =>
-                    Navigator.pushNamed(context, NotificationsScreen.route),
-              ),
-              IconButton(
-                tooltip: 'Sign out',
-                onPressed: _signOutAndClear,
-                icon: const Icon(Icons.logout_rounded),
-              ),
-            ],
-          ),
-          body: _bodyForPage(page),
-          floatingActionButton: _floatingActionButton(page),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: page.index,
-            labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
-            onDestinationSelected: (index) {
-              setState(() => _page = _DashboardPage.values[index]);
+      child: Theme(
+        data: adminTheme,
+        child: ColoredBox(
+          color: _darkMode
+              ? const Color(0xFF0F172A)
+              : CorporateColors.background,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 900;
+              return Scaffold(
+                key: _dashboardScaffoldKey,
+                backgroundColor: Colors.transparent,
+                drawer: wide
+                    ? null
+                    : Drawer(
+                        child: _CommandSideMenu(
+                          selected: page,
+                          onSelect: _selectPage,
+                          onSignOut: _signOutAndClear,
+                          modal: true,
+                          text: text,
+                        ),
+                      ),
+                appBar: AppBar(
+                  backgroundColor: Colors.transparent,
+                  leading: page == _DashboardPage.timeline
+                      ? IconButton(
+                          tooltip: 'Back',
+                          onPressed: () => _selectPage(_DashboardPage.command),
+                          icon: const Icon(Icons.arrow_back_rounded),
+                          /*
+                        icon: const Text('←') /*
+                          '←',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ), */
+                        */
+                        )
+                      : wide
+                      ? null
+                      : Builder(
+                          builder: (context) => IconButton(
+                            tooltip: 'Open menu',
+                            onPressed: () => Scaffold.of(context).openDrawer(),
+                            icon: const Icon(Icons.menu_rounded),
+                          ),
+                        ),
+                  title: Text(_pageTitle(page, text)),
+                  actions: [
+                    _NotificationBell(
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        NotificationsScreen.route,
+                      ),
+                    ),
+                    if (page == _DashboardPage.timeline ||
+                        page == _DashboardPage.settings)
+                      IconButton(
+                        tooltip: 'Profile',
+                        onPressed: () => _selectPage(_DashboardPage.settings),
+                        icon: const Icon(Icons.account_circle_rounded),
+                      )
+                    else
+                      IconButton(
+                        tooltip: 'Sign out',
+                        onPressed: _signOutAndClear,
+                        icon: const Icon(Icons.logout_rounded),
+                      ),
+                  ],
+                ),
+                body: wide
+                    ? Row(
+                        children: [
+                          _CommandSideMenu(
+                            selected: page,
+                            onSelect: _selectPage,
+                            onSignOut: _signOutAndClear,
+                            modal: false,
+                            text: text,
+                          ),
+                          const VerticalDivider(width: 1),
+                          Expanded(child: _bodyForPage(page)),
+                        ],
+                      )
+                    : _bodyForPage(page),
+                floatingActionButton: _floatingActionButton(page, text),
+              );
             },
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.dashboard_rounded),
-                label: 'Command',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.badge_rounded),
-                label: 'Directory',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.meeting_room_rounded),
-                label: 'Zones',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.terminal_rounded),
-                label: 'Timeline',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.inventory_2_rounded),
-                label: 'Archive',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.tune_rounded),
-                label: 'Settings',
-              ),
-            ],
           ),
         ),
       ),
@@ -151,28 +237,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
       case _DashboardPage.archive:
         return const _UserDataArchiveTab();
       case _DashboardPage.settings:
-        return _SettingsTab(onSignOut: _signOutAndClear);
+        return _SettingsTab(
+          onSignOut: _signOutAndClear,
+          darkMode: _darkMode,
+          language: _language,
+          text: _AdminText(_language),
+          onDarkModeChanged: (value) => setState(() => _darkMode = value),
+          onLanguageChanged: (value) => setState(() => _language = value),
+        );
     }
   }
 
-  Widget? _floatingActionButton(_DashboardPage page) {
-    if (page == _DashboardPage.directory) {
-      return FloatingActionButton.extended(
-        onPressed: () {
-          setState(() {
-            _directoryMode = _DirectoryMode.all;
-            _registrationSignal++;
-          });
-        },
-        icon: const Icon(Icons.manage_accounts_rounded),
-        label: const Text('Manage Access'),
-      );
-    }
+  Widget? _floatingActionButton(_DashboardPage page, _AdminText text) {
     if (page == _DashboardPage.zones) {
       return FloatingActionButton.extended(
         onPressed: () => Navigator.pushNamed(context, AddAreaScreen.route),
         icon: const Icon(Icons.playlist_add_rounded),
-        label: const Text('Linked Rooms'),
+        label: Text(text.linkedRooms),
       );
     }
     return null;
@@ -214,20 +295,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ).pushNamedAndRemoveUntil(WelcomeScreen.route, (_) => false);
   }
 
-  String _pageTitle(_DashboardPage page) {
+  String _pageTitle(_DashboardPage page, _AdminText text) {
     switch (page) {
       case _DashboardPage.command:
-        return 'Command Dashboard';
+        return text.dashboard;
       case _DashboardPage.directory:
-        return 'User Directory';
+        return text.userDirectory;
       case _DashboardPage.zones:
-        return 'Zone Control';
+        return text.zoneControl;
       case _DashboardPage.timeline:
-        return 'Entry Timeline';
+        return text.accessLog;
       case _DashboardPage.archive:
-        return 'User Data Archive';
+        return text.userArchive;
       case _DashboardPage.settings:
-        return 'System Preferences';
+        return text.settings;
     }
   }
 }
@@ -278,6 +359,113 @@ class _NotificationBell extends StatelessWidget {
   }
 }
 
+class _CommandSideMenu extends StatelessWidget {
+  const _CommandSideMenu({
+    required this.selected,
+    required this.onSelect,
+    required this.onSignOut,
+    required this.modal,
+    required this.text,
+  });
+
+  final _DashboardPage selected;
+  final ValueChanged<_DashboardPage> onSelect;
+  final Future<void> Function() onSignOut;
+  final bool modal;
+  final _AdminText text;
+
+  @override
+  Widget build(BuildContext context) {
+    final user = context.watch<AuthProvider>().user;
+    return SafeArea(
+      child: SizedBox(
+        width: 280,
+        child: Material(
+          color: Theme.of(context).colorScheme.surface.withValues(alpha: .88),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
+                child: Row(
+                  children: [
+                    const CircleAvatar(child: Icon(Icons.admin_panel_settings)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'FAZEKEY',
+                            style: TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          Text(
+                            user?.name.trim().isNotEmpty == true
+                                ? user!.name
+                                : 'Command Center',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.labelMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: NavigationDrawer(
+                  selectedIndex: selected.index,
+                  onDestinationSelected: (index) {
+                    if (modal) Navigator.pop(context);
+                    onSelect(_DashboardPage.values[index]);
+                  },
+                  children: [
+                    NavigationDrawerDestination(
+                      icon: const Icon(Icons.dashboard_rounded),
+                      label: Text(text.dashboard),
+                    ),
+                    NavigationDrawerDestination(
+                      icon: const Icon(Icons.badge_rounded),
+                      label: Text(text.userDirectory),
+                    ),
+                    NavigationDrawerDestination(
+                      icon: const Icon(Icons.meeting_room_rounded),
+                      label: Text(text.roomControl),
+                    ),
+                    NavigationDrawerDestination(
+                      icon: const Icon(Icons.terminal_rounded),
+                      label: Text(text.accessLog),
+                    ),
+                    NavigationDrawerDestination(
+                      icon: const Icon(Icons.inventory_2_rounded),
+                      label: Text(text.userArchive),
+                    ),
+                    NavigationDrawerDestination(
+                      icon: const Icon(Icons.tune_rounded),
+                      label: Text(text.settings),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: onSignOut,
+                    icon: const Icon(Icons.logout_rounded),
+                    label: Text(text.signOut),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CommandDashboardTab extends StatelessWidget {
   const _CommandDashboardTab({
     required this.onOpenDirectory,
@@ -298,12 +486,20 @@ class _CommandDashboardTab extends StatelessWidget {
       stream: firebase.watchAllUsers(),
       builder: (context, snapshot) {
         final users = snapshot.data ?? const <AppUser>[];
+        final now = DateTime.now();
         final activeToday = logs
             .where(
-              (log) => log.granted && _sameDay(log.timestamp, DateTime.now()),
+              (log) =>
+                  log.granted &&
+                  log.timestamp.isAfter(
+                    now.subtract(const Duration(hours: 24)),
+                  ),
             )
             .length;
-        final pendingReview = users.where(_needsAdminReview).length;
+        final pendingReview = users.where((user) => user.isPending).length;
+        final recentLogs = [...logs]
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
         return ListView(
           padding: const EdgeInsets.all(18),
           children: [
@@ -318,28 +514,28 @@ class _CommandDashboardTab extends StatelessWidget {
                   mainAxisSpacing: 12,
                   childAspectRatio: constraints.maxWidth > 720 ? 1.35 : 1.18,
                   children: [
-                    _CommandMetricCard(
-                      title: 'Active Today',
-                      value: '$activeToday',
+                    _FixedDashboardMetricCard(
+                      label: 'Active Today',
+                      value: activeToday,
                       icon: Icons.verified_user_rounded,
                       onTap: () => onOpenTimeline(limit: 30),
                     ),
-                    _CommandMetricCard(
-                      title: 'Total Users',
-                      value: '${users.length}',
+                    _FixedDashboardMetricCard(
+                      label: 'Total Users',
+                      value: users.length,
                       icon: Icons.groups_rounded,
                       onTap: () => onOpenDirectory(_DirectoryMode.all),
                     ),
-                    _CommandMetricCard(
-                      title: 'Pending Review',
-                      value: '$pendingReview',
-                      icon: Icons.pending_actions_rounded,
+                    _FixedDashboardMetricCard(
+                      label: 'Pending Review',
+                      value: pendingReview,
+                      icon: Icons.rate_review_rounded,
                       onTap: () =>
                           onOpenDirectory(_DirectoryMode.pendingReview),
                     ),
-                    _CommandMetricCard(
-                      title: 'Rooms',
-                      value: '${areas.length}',
+                    _FixedDashboardMetricCard(
+                      label: 'Rooms',
+                      value: areas.length,
                       icon: Icons.meeting_room_rounded,
                       onTap: onOpenZones,
                     ),
@@ -347,10 +543,16 @@ class _CommandDashboardTab extends StatelessWidget {
                 );
               },
             ),
-            const SizedBox(height: 14),
-            _LiveLogsShortcut(onTap: () => onOpenTimeline(limit: 30)),
-            const SizedBox(height: 14),
-            _OperationalPulse(logs: logs, areas: areas),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 88,
+              child: _RoomStatusPanel(areas: areas, onViewAll: onOpenZones),
+            ),
+            const SizedBox(height: 12),
+            _RecentAccessLogsPanel(
+              logs: recentLogs.take(3).toList(),
+              onHistory: () => onOpenTimeline(limit: 30),
+            ),
           ],
         );
       },
@@ -358,177 +560,244 @@ class _CommandDashboardTab extends StatelessWidget {
   }
 }
 
-class _CommandMetricCard extends StatelessWidget {
-  const _CommandMetricCard({
-    required this.title,
+class _FixedDashboardMetricCard extends StatelessWidget {
+  const _FixedDashboardMetricCard({
+    required this.label,
     required this.value,
     required this.icon,
     required this.onTap,
   });
 
-  final String title;
-  final String value;
+  final String label;
+  final int value;
   final IconData icon;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
+    return GestureDetector(
       onTap: onTap,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 28),
-          const Spacer(),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w900),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: CorporateColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: CorporateColors.border),
+          boxShadow: [
+            BoxShadow(
+              color: CorporateColors.lightBlue.withValues(alpha: .22),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
             ),
-          ),
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LiveLogsShortcut extends StatelessWidget {
-  const _LiveLogsShortcut({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final logs = context.watch<LogProvider>().logs;
-    final denied = logs.where((log) => !log.granted).length;
-    return GlassCard(
-      onTap: onTap,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          const CircleAvatar(child: Icon(Icons.terminal_rounded)),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Live Logs',
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
-            ),
-          ),
-          Chip(
-            avatar: const Icon(Icons.rule_rounded, size: 18),
-            label: Text('${logs.length} rows'),
-            visualDensity: VisualDensity.compact,
-          ),
-          const SizedBox(width: 8),
-          Chip(
-            avatar: const Icon(Icons.block_rounded, size: 18),
-            label: Text('$denied denied'),
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _OperationalPulse extends StatelessWidget {
-  const _OperationalPulse({required this.logs, required this.areas});
-
-  final List<AccessLog> logs;
-  final List<Area> areas;
-
-  @override
-  Widget build(BuildContext context) {
-    final capacity = areas.fold<int>(0, (sum, area) => sum + area.capacity);
-    final occupied = areas.fold<int>(
-      0,
-      (sum, area) => sum + area.currentOccupancy,
-    );
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Operations',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 210,
-            child: BarChart(
-              BarChartData(
-                maxY: _chartMaxY(logs),
-                borderData: FlBorderData(show: false),
-                gridData: const FlGridData(show: true, horizontalInterval: 10),
-                titlesData: FlTitlesData(
-                  topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  leftTitles: const AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 36,
-                      interval: 10,
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, color: CorporateColors.teal, size: 20),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: CorporateColors.mutedText,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (value, _) {
-                        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-                        return Text(days[value.toInt().clamp(0, 4)]);
-                      },
+                ],
+              ),
+              const Spacer(),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '$value',
+                  style: const TextStyle(
+                    color: CorporateColors.text,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoomStatusPanel extends StatelessWidget {
+  const _RoomStatusPanel({required this.areas, required this.onViewAll});
+
+  final List<Area> areas;
+  final VoidCallback onViewAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _dashboardRoomSummary(areas);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: CorporateColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: CorporateColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.sensors_rounded, color: CorporateColors.teal),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Room Status',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    summary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: CorporateColors.mutedText,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(onPressed: onViewAll, child: const Text('View All')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentAccessLogsPanel extends StatelessWidget {
+  const _RecentAccessLogsPanel({required this.logs, required this.onHistory});
+
+  final List<AccessLog> logs;
+  final VoidCallback onHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: CorporateColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: CorporateColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Recent Access Logs',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                TextButton(onPressed: onHistory, child: const Text('History')),
+              ],
+            ),
+            const Divider(height: 14),
+            if (logs.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 22),
+                child: Center(
+                  child: Text(
+                    'No recent security events',
+                    style: TextStyle(
+                      color: CorporateColors.mutedText,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                barGroups: List.generate(5, (index) {
-                  final day = _workWeekStart().add(Duration(days: index));
-                  final count = logs
-                      .where((log) => _sameDay(log.timestamp, day))
-                      .length;
-                  return BarChartGroupData(
-                    x: index,
-                    barRods: [
-                      BarChartRodData(
-                        toY: count.toDouble(),
-                        borderRadius: BorderRadius.circular(6),
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ],
-                  );
-                }),
+              )
+            else
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final log in logs)
+                    _RecentLogRow(
+                      log: log,
+                      onDetails: () => _showSecurityDetail(context, log),
+                    ),
+                ],
               ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentLogRow extends StatelessWidget {
+  const _RecentLogRow({required this.log, required this.onDetails});
+
+  final AccessLog log;
+  final VoidCallback onDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = log.granted
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFE11D48);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_logUserName(log)} | ${log.areaName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                Text(
+                  '${DateFormat.jm().format(log.timestamp)} | ${log.status.toUpperCase()}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: CorporateColors.mutedText,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
-          if (capacity > 0) ...[
-            const SizedBox(height: 14),
-            LinearProgressIndicator(
-              value: (occupied / capacity).clamp(0, 1),
-              minHeight: 8,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Capacity used: $occupied / $capacity',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ],
+          TextButton(onPressed: onDetails, child: const Text('Details')),
         ],
       ),
     );
@@ -616,17 +885,6 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
                         onChanged: (_) => setState(() {}),
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    FilterChip(
-                      selected: widget.mode == _DirectoryMode.pendingReview,
-                      onSelected: (selected) => widget.onModeChanged(
-                        selected
-                            ? _DirectoryMode.pendingReview
-                            : _DirectoryMode.all,
-                      ),
-                      avatar: const Icon(Icons.pending_actions_rounded),
-                      label: const Text('Pending'),
-                    ),
                   ],
                 ),
                 if (userSnapshot.hasError || grantSnapshot.hasError) ...[
@@ -651,6 +909,11 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
                         permissionCount: math.max(
                           user.assignedRooms.length,
                           grantsByUser[user.id] ?? 0,
+                        ),
+                        onView: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => _UserDeepDetailPage(user: user),
+                          ),
                         ),
                         onEdit: () => _openEditPanel(context, user, areas),
                       ),
@@ -682,6 +945,40 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
   }
 
   void _openEditPanel(BuildContext context, AppUser user, List<Area> areas) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => _UserActionSheet(
+        user: user,
+        onScanFace: () {
+          Navigator.pop(sheetContext);
+          Navigator.pushNamed(
+            context,
+            FaceRegistrationScreen.route,
+            arguments: FaceRegistrationArgs(user: user),
+          );
+        },
+        onUpdateAccount: () {
+          Navigator.pop(sheetContext);
+          _openUserEditorDialog(context, user, areas);
+        },
+        onDeleteUser: () {
+          Navigator.pop(sheetContext);
+          unawaited(_deleteUser(context, user));
+        },
+        onRevokeAccess: () {
+          Navigator.pop(sheetContext);
+          unawaited(_revokeUserAccess(context, user));
+        },
+      ),
+    );
+  }
+
+  void _openUserEditorDialog(
+    BuildContext context,
+    AppUser user,
+    List<Area> areas,
+  ) {
     showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -705,6 +1002,41 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
       },
     );
   }
+
+  Future<void> _deleteUser(BuildContext context, AppUser user) async {
+    final id = user.id.trim();
+    if (id.isEmpty) return;
+    final firebase = context.read<FirebaseService>();
+    final face = context.read<FaceProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await firebase.deleteManagedUser(id);
+      await face.deleteLocalFace(id);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('${user.name} deleted from FAZEKEY.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
+  Future<void> _revokeUserAccess(BuildContext context, AppUser user) async {
+    final id = user.id.trim();
+    if (id.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<FirebaseService>().revokeUserAccess(id);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Access revoked for ${user.name}.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
 }
 
 class _NewRegistrationCard extends StatefulWidget {
@@ -723,6 +1055,22 @@ class _NewRegistrationCard extends StatefulWidget {
 }
 
 class _NewRegistrationCardState extends State<_NewRegistrationCard> {
+  static const _departmentOptions = <String>[
+    'Information Technology',
+    'ICT Division',
+    'Software Engineering',
+    'Multimedia',
+    'Information Security',
+    'Other...',
+  ];
+  static const _programmeOptions = <String>[
+    'Bachelor of Computer Science (Information Security) with Honours - BIS',
+    'Bachelor of Computer Science (Multimedia Computing) with Honours - BIM',
+    'Bachelor of Computer Science (Software Engineering) with Honours - BIS',
+    'Bachelor of Computer Science (Web Technology) with Honours - BIW',
+    'Bachelor of Information Technology with Honours - BIT',
+  ];
+
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _identity = TextEditingController();
@@ -730,11 +1078,15 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
   final _department = TextEditingController();
   final _phone = TextEditingController();
   final List<String> _selectedRooms = [];
+  String _departmentChoice = _departmentOptions.first;
+  String _programmeChoice = _programmeOptions.first;
   String _position = 'Student';
   int _accessLevel = 2;
   DateTime _startAt = DateTime.now();
   DateTime _endAt = DateTime.now().add(const Duration(days: 90));
   bool _saving = false;
+  AppUser? _credentialUser;
+  String? _temporaryPassword;
 
   @override
   void dispose() {
@@ -759,6 +1111,8 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
               const Expanded(
                 child: Text(
                   'New Registration',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17),
                 ),
               ),
@@ -769,7 +1123,7 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                       ? Icons.keyboard_arrow_up_rounded
                       : Icons.keyboard_arrow_down_rounded,
                 ),
-                label: const Text('Manage Access'),
+                label: Text(widget.expanded ? 'Close' : 'Open'),
               ),
             ],
           ),
@@ -785,45 +1139,64 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                     validator: _required,
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  _ResponsiveFields(
                     children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _identity,
-                          decoration: const InputDecoration(
-                            labelText: 'Unique ID',
-                          ),
-                          validator: _required,
+                      TextFormField(
+                        controller: _identity,
+                        decoration: const InputDecoration(
+                          labelText: 'Unique ID',
                         ),
+                        validator: _required,
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _email,
-                          decoration: const InputDecoration(labelText: 'Email'),
-                          validator: _required,
-                        ),
+                      TextFormField(
+                        controller: _email,
+                        decoration: const InputDecoration(labelText: 'Email'),
+                        validator: _required,
                       ),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  _ResponsiveFields(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _department,
-                          decoration: const InputDecoration(
-                            labelText: 'Department',
+                      Column(
+                        children: [
+                          DropdownButtonFormField<String>(
+                            initialValue: _departmentChoice,
+                            decoration: const InputDecoration(
+                              labelText: 'Department',
+                            ),
+                            items: [
+                              for (final option in _departmentOptions)
+                                DropdownMenuItem(
+                                  value: option,
+                                  child: Text(option),
+                                ),
+                            ],
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _departmentChoice = value);
+                            },
                           ),
-                          validator: _required,
-                        ),
+                          if (_departmentChoice == 'Other...') ...[
+                            const SizedBox(height: 10),
+                            TextFormField(
+                              controller: _department,
+                              decoration: const InputDecoration(
+                                labelText: 'Custom Department',
+                              ),
+                              validator: _required,
+                            ),
+                          ],
+                        ],
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _phone,
-                          decoration: const InputDecoration(labelText: 'Phone'),
-                        ),
+                      TextFormField(
+                        controller: _phone,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(labelText: 'Phone'),
                       ),
                     ],
                   ),
@@ -832,9 +1205,32 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                     value: _position,
                     onChanged: (value) => setState(() => _position = value),
                   ),
+                  if (_position == 'Student') ...[
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      initialValue: _programmeChoice,
+                      decoration: const InputDecoration(labelText: 'Programme'),
+                      items: [
+                        for (final option in _programmeOptions)
+                          DropdownMenuItem(
+                            value: option,
+                            child: Text(
+                              option,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _programmeChoice = value);
+                        }
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   _RoomMultiSelectField(
-                    title: 'Manage Access',
+                    title: 'Room Schedule',
                     options: widget.areas.map(_roomLabel).toList(),
                     selected: _selectedRooms,
                     onChanged: (rooms) {
@@ -846,22 +1242,17 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                     },
                   ),
                   const SizedBox(height: 10),
-                  Row(
+                  _ResponsiveFields(
                     children: [
-                      Expanded(
-                        child: _DateButton(
-                          label: 'Start',
-                          value: _startAt,
-                          onTap: () => _pickDate(start: true),
-                        ),
+                      _DateButton(
+                        label: 'Start',
+                        value: _startAt,
+                        onTap: () => _pickDate(start: true),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _DateButton(
-                          label: 'End',
-                          value: _endAt,
-                          onTap: () => _pickDate(start: false),
-                        ),
+                      _DateButton(
+                        label: 'End',
+                        value: _endAt,
+                        onTap: () => _pickDate(start: false),
                       ),
                     ],
                   ),
@@ -894,6 +1285,18 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                       label: Text(_saving ? 'Saving' : 'Save Registration'),
                     ),
                   ),
+                  if (_credentialUser != null &&
+                      _temporaryPassword != null) ...[
+                    const SizedBox(height: 16),
+                    _CredentialConfirmationPanel(
+                      user: _credentialUser!,
+                      temporaryPassword: _temporaryPassword!,
+                      onClose: () => setState(() {
+                        _credentialUser = null;
+                        _temporaryPassword = null;
+                      }),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -915,24 +1318,27 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
     }
     setState(() => _saving = true);
     final firebase = context.read<FirebaseService>();
+    final department = _selectedDepartment;
     try {
       final created = await firebase.createManagedUser(
         name: _name.text,
         identityNumber: _identity.text,
         email: _email.text,
-        department: _department.text,
+        department: department,
         phone: _phone.text,
         room: _selectedRooms.first,
         rooms: _selectedRooms,
         role: 'user',
         accessLevel: _accessLevel,
         position: _position,
+        course: _position == 'Student' ? _programmeChoice : department,
       );
       final assignedUser = created.copyWith(
         room: _selectedRooms.first,
         rooms: _selectedRooms,
         status: 'approved',
         position: _position,
+        course: _position == 'Student' ? _programmeChoice : department,
       );
       for (final area in widget.areas) {
         if (!_selectedRooms.any(
@@ -954,8 +1360,12 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
         accessLevel: _accessLevel,
       );
       if (!mounted) return;
+      setState(() {
+        _credentialUser = assignedUser.copyWith(department: department);
+        _temporaryPassword = _generateTemporaryPassword();
+      });
       _showSnack(
-        'Registration saved with ${_selectedRooms.length} room links.',
+        'Registration saved. Send the temporary password or register face scan below.',
       );
       _clear();
     } catch (e) {
@@ -994,11 +1404,18 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
     _phone.clear();
     setState(() {
       _selectedRooms.clear();
+      _departmentChoice = _departmentOptions.first;
+      _programmeChoice = _programmeOptions.first;
       _position = 'Student';
       _accessLevel = 2;
       _startAt = DateTime.now();
       _endAt = DateTime.now().add(const Duration(days: 90));
     });
+  }
+
+  String get _selectedDepartment {
+    if (_departmentChoice == 'Other...') return _department.text.trim();
+    return _departmentChoice;
   }
 
   void _showSnack(String message) {
@@ -1009,6 +1426,216 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
 
   static String? _required(String? value) =>
       value == null || value.trim().isEmpty ? 'Required' : null;
+
+  String _generateTemporaryPassword() {
+    const alphabet =
+        'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%';
+    final random = math.Random.secure();
+    return 'fx_${List.generate(10, (_) => alphabet[random.nextInt(alphabet.length)]).join()}';
+  }
+}
+
+class _CredentialConfirmationPanel extends StatelessWidget {
+  const _CredentialConfirmationPanel({
+    required this.user,
+    required this.temporaryPassword,
+    required this.onClose,
+  });
+
+  final AppUser user;
+  final String temporaryPassword;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: CorporateColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: CorporateColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Image.asset(
+                  'assets/images/logo2.png',
+                  height: 78,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Your Fazekey access is live, ${user.name.trim().isEmpty ? 'User' : user.name.trim()}. Use the temporary password below to unlock your first door.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '⚠️ This password expires in 24 hours.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFE11D48),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 12),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: CorporateColors.teal),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: SelectableText(
+                          temporaryPassword,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 20,
+                            letterSpacing: .6,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Copy',
+                        onPressed: () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: temporaryPassword),
+                          );
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Password copied.')),
+                          );
+                        },
+                        icon: const Icon(Icons.copy_rounded),
+                      ),
+                      IconButton(
+                        tooltip: 'Print',
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Password ready for printing.'),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.print_rounded),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () async {
+                  try {
+                    await context.read<FirebaseService>().sendSetupEmail(
+                      user.email,
+                      user: user,
+                      temporaryPassword: temporaryPassword,
+                    );
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text(e.toString())));
+                  }
+                },
+                icon: const Icon(Icons.mail_outline_rounded),
+                label: const Text('Send Temp Password'),
+              ),
+              const SizedBox(height: 18),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: CorporateColors.surfaceHigh,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: CorporateColors.teal),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Face Registration',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.pushNamed(
+                              context,
+                              FaceRegistrationScreen.route,
+                              arguments: FaceRegistrationArgs(user: user),
+                            );
+                          },
+                          icon: const Icon(Icons.camera_alt_rounded),
+                          label: const Text('Register Face Scan'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextButton(onPressed: onClose, child: const Text('Close')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ResponsiveFields extends StatelessWidget {
+  const _ResponsiveFields({
+    required this.children,
+    this.crossAxisAlignment = CrossAxisAlignment.center,
+  });
+
+  final List<Widget> children;
+  final CrossAxisAlignment crossAxisAlignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 560) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < children.length; i++) ...[
+                if (i > 0) const SizedBox(height: 10),
+                children[i],
+              ],
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: crossAxisAlignment,
+          children: [
+            for (var i = 0; i < children.length; i++) ...[
+              if (i > 0) const SizedBox(width: 10),
+              Expanded(child: children[i]),
+            ],
+          ],
+        );
+      },
+    );
+  }
 }
 
 class _PositionToggle extends StatelessWidget {
@@ -1203,15 +1830,25 @@ class _UserDirectoryCard extends StatelessWidget {
   const _UserDirectoryCard({
     required this.user,
     required this.permissionCount,
+    required this.onView,
     required this.onEdit,
   });
 
   final AppUser user;
   final int permissionCount;
+  final VoidCallback onView;
   final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
+    final id = _uniqueId(user).toLowerCase();
+    final name = user.name.trim().isEmpty ? 'syed' : user.name.trim();
+    final role = user.roleLabel.trim().isEmpty ? 'Staff' : user.roleLabel;
+    final faceStatus = user.hasFace ? 'Verified' : 'Not enrolled';
+    final rooms = user.assignedRooms
+        .where((room) => room.trim().isNotEmpty)
+        .toList(growable: false);
+    final photo = _profileImage(user.photoUrl);
     return GlassCard(
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -1220,71 +1857,258 @@ class _UserDirectoryCard extends StatelessWidget {
           Row(
             children: [
               CircleAvatar(
-                child: Text(
-                  user.name.trim().isEmpty
-                      ? '?'
-                      : user.name.trim().characters.first.toUpperCase(),
-                ),
+                radius: 28,
+                backgroundColor: const Color(0xFFE0F2FE),
+                backgroundImage: photo,
+                child: photo == null
+                    ? const Icon(
+                        Icons.person_rounded,
+                        color: CorporateColors.teal,
+                      )
+                    : null,
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  user.name.trim().isEmpty ? 'Unnamed Profile' : user.name,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w900,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$role (${_levelSummary(rooms)})',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '$name | ID: $id',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: CorporateColors.mutedText,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              IconButton(
-                tooltip: 'Edit identity',
-                onPressed: onEdit,
-                icon: const Icon(Icons.edit_rounded),
+              Tooltip(
+                message: 'View full profile',
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: CorporateColors.teal,
+                    textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  onPressed: onView,
+                  child: const Text('View'),
+                ),
+              ),
+              Tooltip(
+                message: 'Edit identity',
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: CorporateColors.teal,
+                    textStyle: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  onPressed: onEdit,
+                  child: const Text('Edit'),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          const SizedBox(height: 8),
+          Row(
             children: [
-              _StatusChip(
-                icon: Icons.fingerprint_rounded,
-                label: _uniqueId(user),
+              Expanded(
+                child: _DirectoryInfo(label: 'Face', value: faceStatus),
               ),
-              _RoleBadge(role: user.roleLabel),
-              _FaceEnrollmentChip(enrolled: user.hasFace),
-              _StatusChip(
-                icon: Icons.vpn_key_rounded,
-                label: '$permissionCount permissions',
+              const SizedBox(width: 8),
+              Expanded(
+                child: _DirectoryInfo(
+                  label: 'Rooms',
+                  value: '$permissionCount assigned',
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 78),
-            child: SingleChildScrollView(
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final room in user.assignedRooms)
-                    Chip(
-                      visualDensity: VisualDensity.compact,
-                      avatar: const Icon(Icons.meeting_room_rounded, size: 17),
-                      label: Text(room),
-                    ),
-                  if (user.assignedRooms.isEmpty)
-                    const Chip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text('No room links'),
-                    ),
-                ],
+          if (rooms.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final room in rooms.take(4))
+                  _RoomBadge(label: '$room\nFloor: ${_roomLevel(room)}'),
+                if (rooms.length > 4) _RoomBadge(label: '+${rooms.length - 4}'),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  ImageProvider<Object>? _profileImage(String? path) {
+    final value = path?.trim();
+    if (value == null || value.isEmpty) return null;
+    final file = File(value);
+    return file.existsSync() ? FileImage(file) : null;
+  }
+
+  String _levelSummary(List<String> rooms) {
+    final levels = rooms
+        .map(_roomLevel)
+        .toSet()
+        .where((level) => level != 'Room');
+    if (levels.isEmpty) return 'No room assigned';
+    return levels.join(', ');
+  }
+
+  String _roomLevel(String room) {
+    final key = _accessKey(room);
+    if (key.contains('fileroom') || key.contains('generaloffice')) {
+      return 'Level G';
+    }
+    if (key.contains('serverroom1') || key.contains('accesslab')) {
+      return 'Level 1';
+    }
+    if (key.contains('serverroom2') || key.contains('itdevelopmentsuite')) {
+      return 'Level 2';
+    }
+    if (key.contains('serverroom3') || key.contains('networkcoreoperations')) {
+      return 'Level 3';
+    }
+    return 'Room';
+  }
+}
+
+class _DirectoryInfo extends StatelessWidget {
+  const _DirectoryInfo({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: CorporateColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: CorporateColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: CorporateColors.mutedText,
+                fontWeight: FontWeight.w800,
               ),
             ),
-          ),
-        ],
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoomBadge extends StatelessWidget {
+  const _RoomBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFBAE6FD)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+}
+
+class _UserActionSheet extends StatelessWidget {
+  const _UserActionSheet({
+    required this.user,
+    required this.onScanFace,
+    required this.onUpdateAccount,
+    required this.onDeleteUser,
+    required this.onRevokeAccess,
+  });
+
+  final AppUser user;
+  final VoidCallback onScanFace;
+  final VoidCallback onUpdateAccount;
+  final VoidCallback onDeleteUser;
+  final VoidCallback onRevokeAccess;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              user.name.trim().isEmpty ? 'Operational Controls' : user.name,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 14),
+            TextButton(
+              onPressed: onScanFace,
+              child: const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Scan Face'),
+              ),
+            ),
+            TextButton(
+              onPressed: onUpdateAccount,
+              child: const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Update Account'),
+              ),
+            ),
+            TextButton(
+              onPressed: onRevokeAccess,
+              child: const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Revoke Access'),
+              ),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFFF6B81),
+              ),
+              onPressed: onDeleteUser,
+              child: const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Delete User'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1337,7 +2161,7 @@ class _FaceEnrollmentChip extends StatelessWidget {
     return Chip(
       visualDensity: VisualDensity.compact,
       avatar: Icon(Icons.circle, size: 12, color: color),
-      label: Text(enrolled ? 'Face enrolled' : 'Face pending'),
+      label: Text(enrolled ? 'Face enrolled' : 'Face setup needed'),
     );
   }
 }
@@ -1360,8 +2184,10 @@ class _UserEditPanelState extends State<_UserEditPanel> {
   late final TextEditingController _department;
   late final TextEditingController _phone;
   late String _position;
-  late String _status;
   late List<String> _rooms;
+  late String _departmentChoice;
+  DateTime _grantStart = DateTime.now();
+  DateTime _grantEnd = DateTime.now().add(const Duration(days: 90));
   bool _saving = false;
 
   @override
@@ -1373,10 +2199,12 @@ class _UserEditPanelState extends State<_UserEditPanel> {
     _email = TextEditingController(text: user.email);
     _department = TextEditingController(text: user.department);
     _phone = TextEditingController(text: user.phone);
+    _departmentChoice = commandCenterDepartments.contains(user.department)
+        ? user.department
+        : 'Other...';
     _position = user.roleLabel.toLowerCase().contains('staff')
         ? 'Staff'
         : 'Student';
-    _status = user.status.trim().isEmpty ? 'approved' : user.status;
     _rooms = [...user.assignedRooms];
   }
 
@@ -1444,14 +2272,39 @@ class _UserEditPanelState extends State<_UserEditPanel> {
                     validator: _required,
                   ),
                   const SizedBox(height: 10),
-                  TextFormField(
-                    controller: _department,
+                  DropdownButtonFormField<String>(
+                    initialValue: _departmentChoice,
+                    isExpanded: true,
                     decoration: const InputDecoration(labelText: 'Department'),
-                    validator: _required,
+                    items: commandCenterDepartments
+                        .map(
+                          (department) => DropdownMenuItem(
+                            value: department,
+                            child: Text(department),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _departmentChoice = value);
+                      if (value != 'Other...') _department.text = value;
+                    },
                   ),
+                  if (_departmentChoice == 'Other...') ...[
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: _department,
+                      decoration: const InputDecoration(
+                        labelText: 'Custom Department',
+                      ),
+                      validator: _required,
+                    ),
+                  ],
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _phone,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     decoration: const InputDecoration(labelText: 'Phone'),
                   ),
                   const SizedBox(height: 10),
@@ -1460,26 +2313,23 @@ class _UserEditPanelState extends State<_UserEditPanel> {
                     onChanged: (value) => setState(() => _position = value),
                   ),
                   const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    initialValue: _status,
-                    decoration: const InputDecoration(labelText: 'Status'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'approved',
-                        child: Text('Approved'),
+                  _ResponsiveFields(
+                    children: [
+                      _DateButton(
+                        label: 'Access Starts',
+                        value: _grantStart,
+                        onTap: () => _pickGrantDate(start: true),
                       ),
-                      DropdownMenuItem(
-                        value: 'pending',
-                        child: Text('Pending'),
+                      _DateButton(
+                        label: 'Access Ends',
+                        value: _grantEnd,
+                        onTap: () => _pickGrantDate(start: false),
                       ),
                     ],
-                    onChanged: (value) {
-                      if (value != null) setState(() => _status = value);
-                    },
                   ),
                   const SizedBox(height: 10),
                   _RoomMultiSelectField(
-                    title: 'Manage Access',
+                    title: 'Room Schedule',
                     options: widget.areas.map(_roomLabel).toList(),
                     selected: _rooms,
                     onChanged: (rooms) => setState(() => _rooms = rooms),
@@ -1506,21 +2356,42 @@ class _UserEditPanelState extends State<_UserEditPanel> {
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
+    if (!_grantEnd.isAfter(_grantStart)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Access end must be after start.')),
+      );
+      return;
+    }
     setState(() => _saving = true);
+    final department = _departmentChoice == 'Other...'
+        ? _department.text.trim()
+        : _departmentChoice;
     final updated = widget.user.copyWith(
       name: _name.text.trim(),
       identityNumber: _identity.text.trim(),
       email: _email.text.trim(),
-      department: _department.text.trim(),
+      department: department,
       phone: _phone.text.trim(),
       room: _rooms.isEmpty ? '' : _rooms.first,
       rooms: _rooms,
       role: 'User',
       position: _position,
-      status: _status,
+      status: 'approved',
     );
     try {
-      await context.read<FirebaseService>().updateUserProfile(updated);
+      final firebase = context.read<FirebaseService>();
+      await firebase.updateUserProfile(updated);
+      for (final room in _rooms) {
+        final area = _areaForRoom(room);
+        if (area == null) continue;
+        await firebase.grantRoomAccess(
+          user: updated,
+          area: area,
+          startAt: _grantStart,
+          endAt: _grantEnd,
+          approveUser: false,
+        );
+      }
       if (!mounted) return;
       Navigator.pop(context);
       ScaffoldMessenger.of(
@@ -1535,6 +2406,33 @@ class _UserEditPanelState extends State<_UserEditPanel> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Area? _areaForRoom(String room) {
+    for (final area in widget.areas) {
+      if (_sameAccessTarget(room, _roomLabel(area))) return area;
+    }
+    return null;
+  }
+
+  Future<void> _pickGrantDate({required bool start}) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: start ? _grantStart : _grantEnd,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() {
+      if (start) {
+        _grantStart = picked;
+        if (!_grantEnd.isAfter(_grantStart)) {
+          _grantEnd = _grantStart.add(const Duration(days: 1));
+        }
+      } else {
+        _grantEnd = picked;
+      }
+    });
   }
 
   static String? _required(String? value) =>
@@ -1581,6 +2479,8 @@ class _ZoneControlTabState extends State<_ZoneControlTab> {
           child: ListView(
             padding: const EdgeInsets.all(18),
             children: [
+              const _ZoneControlIntro(),
+              const SizedBox(height: 12),
               LayoutBuilder(
                 builder: (context, constraints) {
                   final wide = constraints.maxWidth > 760;
@@ -1734,6 +2634,24 @@ class _ZoneControlTabState extends State<_ZoneControlTab> {
   }
 }
 
+class _ZoneControlIntro extends StatelessWidget {
+  const _ZoneControlIntro();
+
+  @override
+  Widget build(BuildContext context) {
+    return const GlassCard(
+      padding: EdgeInsets.all(14),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'Zone Control manages room details, floor labels, capacity, role policy, live occupancy, and room-specific access logs.',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+    );
+  }
+}
+
 class _ZoneMetricToggle extends StatelessWidget {
   const _ZoneMetricToggle({
     required this.selected,
@@ -1844,9 +2762,10 @@ class _RoomAssetCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      '${area.location} | ${area.floor}',
+                      _roomSubtitle(area),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ],
                 ),
@@ -2130,7 +3049,7 @@ class _RoomPieChart extends StatelessWidget {
   }
 }
 
-class _RoomHistoryView extends StatelessWidget {
+class _RoomHistoryView extends StatefulWidget {
   const _RoomHistoryView({
     required this.area,
     required this.logs,
@@ -2142,20 +3061,59 @@ class _RoomHistoryView extends StatelessWidget {
   final List<AccessLog> occupants;
 
   @override
+  State<_RoomHistoryView> createState() => _RoomHistoryViewState();
+}
+
+class _RoomHistoryViewState extends State<_RoomHistoryView> {
+  String _filter = 'month';
+
+  @override
   Widget build(BuildContext context) {
-    final roomLogs = logs.where((log) => _logBelongsToArea(log, area)).toList();
+    final roomLogs =
+        widget.logs
+            .where((log) => _logBelongsToArea(log, widget.area))
+            .where(_matchesFilter)
+            .toList()
+          ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _RoomLogFilterChip(
+              label: 'Today',
+              selected: _filter == 'today',
+              onTap: () => setState(() => _filter = 'today'),
+            ),
+            _RoomLogFilterChip(
+              label: '7 days',
+              selected: _filter == 'week',
+              onTap: () => setState(() => _filter = 'week'),
+            ),
+            _RoomLogFilterChip(
+              label: 'This month',
+              selected: _filter == 'month',
+              onTap: () => setState(() => _filter = 'month'),
+            ),
+            _RoomLogFilterChip(
+              label: 'All',
+              selected: _filter == 'all',
+              onTap: () => setState(() => _filter = 'all'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         const Text(
           'Live Occupancy',
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 8),
-        if (occupants.isEmpty)
+        if (widget.occupants.isEmpty)
           const Text('No live occupants recorded.')
         else
-          for (final log in occupants.take(6))
+          for (final log in widget.occupants.take(6))
             ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
@@ -2169,8 +3127,47 @@ class _RoomHistoryView extends StatelessWidget {
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 8),
-        for (final log in roomLogs.take(6)) _CompactLogLine(log: log),
+        if (roomLogs.isEmpty)
+          const Text('No room logs for this filter.')
+        else
+          for (final log in roomLogs.take(12)) _CompactLogLine(log: log),
       ],
+    );
+  }
+
+  bool _matchesFilter(AccessLog log) {
+    final now = DateTime.now();
+    switch (_filter) {
+      case 'today':
+        return _sameDay(log.timestamp, now);
+      case 'week':
+        return log.timestamp.isAfter(now.subtract(const Duration(days: 7)));
+      case 'month':
+        return log.timestamp.year == now.year &&
+            log.timestamp.month == now.month;
+      default:
+        return true;
+    }
+  }
+}
+
+class _RoomLogFilterChip extends StatelessWidget {
+  const _RoomLogFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
     );
   }
 }
@@ -2369,6 +3366,9 @@ class _EntryTimelineTab extends StatefulWidget {
 class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   final _search = TextEditingController();
   String _status = 'all';
+  String _room = 'all';
+  String _period = 'all';
+  DateTime? _selectedDate;
 
   @override
   void dispose() {
@@ -2379,62 +3379,186 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<LogProvider>();
-    final logs = _filtered(provider.logs).take(widget.initialLimit).toList();
+    final sourceLogs = provider.logs.isEmpty
+        ? _sampleAccessLogs()
+        : provider.logs;
+    final roomOptions = _roomOptions(sourceLogs);
+    final filteredLogs = _filtered(sourceLogs);
+    final visibleLogs = filteredLogs.take(widget.initialLimit).toList();
+    final grantedCount = filteredLogs.where((log) => log.granted).length;
+    final deniedCount = filteredLogs.length - grantedCount;
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _search,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search_rounded),
-                  hintText: 'Search timeline',
+        Text(
+          'ACCESS LOG',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0,
+            color: CorporateColors.text,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _AccessLogPanel(
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: 260,
+                child: TextField(
+                  controller: _search,
+                  decoration: const InputDecoration(
+                    labelText: 'Search',
+                    prefixIcon: Icon(Icons.search_rounded),
+                  ),
+                  onChanged: (_) => setState(() {}),
                 ),
-                onChanged: (_) => setState(() {}),
               ),
-            ),
-            const SizedBox(width: 10),
-            DropdownButton<String>(
-              value: _status,
-              items: const [
-                DropdownMenuItem(value: 'all', child: Text('All')),
-                DropdownMenuItem(value: 'granted', child: Text('Granted')),
-                DropdownMenuItem(value: 'denied', child: Text('Denied')),
-              ],
-              onChanged: (value) {
-                if (value != null) setState(() => _status = value);
-              },
-            ),
-          ],
+              SizedBox(
+                width: 160,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _status,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: const [
+                    DropdownMenuItem(value: 'all', child: Text('All')),
+                    DropdownMenuItem(value: 'granted', child: Text('Granted')),
+                    DropdownMenuItem(value: 'denied', child: Text('Denied')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _status = value);
+                  },
+                ),
+              ),
+              SizedBox(
+                width: 220,
+                child: DropdownButtonFormField<String>(
+                  initialValue: roomOptions.contains(_room) ? _room : 'all',
+                  decoration: const InputDecoration(labelText: 'Room'),
+                  items: [
+                    const DropdownMenuItem(value: 'all', child: Text('All')),
+                    for (final room in roomOptions)
+                      if (room != 'all')
+                        DropdownMenuItem(value: room, child: Text(room)),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) setState(() => _room = value);
+                  },
+                ),
+              ),
+              SizedBox(
+                height: 56,
+                child: OutlinedButton.icon(
+                  onPressed: _pickLogDate,
+                  icon: const Icon(Icons.event_rounded),
+                  label: Text(
+                    _selectedDate == null
+                        ? 'Date'
+                        : DateFormat.yMMMd().format(_selectedDate!),
+                  ),
+                ),
+              ),
+              if (_selectedDate != null)
+                SizedBox(
+                  height: 56,
+                  child: TextButton(
+                    onPressed: () => setState(() => _selectedDate = null),
+                    child: const Text('Clear'),
+                  ),
+                ),
+              _PeriodChip(
+                label: 'Today',
+                selected: _period == 'today',
+                onTap: () => setState(() {
+                  _period = 'today';
+                  _selectedDate = null;
+                }),
+              ),
+              _PeriodChip(
+                label: '7 days',
+                selected: _period == 'week',
+                onTap: () => setState(() {
+                  _period = 'week';
+                  _selectedDate = null;
+                }),
+              ),
+              _PeriodChip(
+                label: 'This month',
+                selected: _period == 'month',
+                onTap: () => setState(() {
+                  _period = 'month';
+                  _selectedDate = null;
+                }),
+              ),
+              _PeriodChip(
+                label: 'All',
+                selected: _period == 'all',
+                onTap: () => setState(() => _period = 'all'),
+              ),
+            ],
+          ),
         ),
         if (provider.error != null) ...[
           const SizedBox(height: 12),
           _InlineError(
             message:
-                'Entry Timeline sync is delayed. Firestore will retry automatically.',
+                'Access Log sync is delayed. Firestore will retry automatically.',
           ),
         ],
         const SizedBox(height: 12),
-        if (logs.isEmpty)
-          const _EmptyState(
-            icon: Icons.terminal_rounded,
-            title: 'No timeline entries',
-          )
-        else
-          for (final log in logs)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _TimelineRow(
-                log: log,
-                onTap: () => _showSecurityDetail(context, log),
+        _AccessLogPanel(
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              if (visibleLogs.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(22),
+                  child: _EmptyState(
+                    icon: Icons.terminal_rounded,
+                    title: 'No access log entries',
+                  ),
+                )
+              else
+                for (final log in visibleLogs)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: _TimelineRow(
+                      log: log,
+                      onTap: () => _showSecurityDetail(context, log),
+                    ),
+                  ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(14),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      'Total: ${filteredLogs.length}',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    Text(
+                      'Granted: $grantedCount',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    Text(
+                      'Denied: $deniedCount',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    if (provider.logs.length > widget.initialLimit)
+                      TextButton.icon(
+                        onPressed: provider.loadMore,
+                        icon: const Icon(Icons.expand_more_rounded),
+                        label: const Text('Load more'),
+                      ),
+                  ],
+                ),
               ),
-            ),
-        TextButton.icon(
-          onPressed: provider.loadMore,
-          icon: const Icon(Icons.expand_more_rounded),
-          label: const Text('Load more'),
+            ],
+          ),
         ),
       ],
     );
@@ -2443,16 +3567,173 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   List<AccessLog> _filtered(List<AccessLog> logs) {
     final query = _search.text.trim().toLowerCase();
     return logs.where((log) {
-      if (_status != 'all' && log.status != _status) return false;
+      if (_status == 'granted' && !log.granted) return false;
+      if (_status == 'denied' && log.granted) return false;
+      if (_room != 'all' && _accessKey(log.areaName) != _accessKey(_room)) {
+        return false;
+      }
+      if (_selectedDate != null && !_sameDay(log.timestamp, _selectedDate!)) {
+        return false;
+      }
+      if (_selectedDate == null && !_matchesPeriod(log.timestamp)) return false;
       if (query.isEmpty) return true;
       return [
-        log.userName,
+        _logUserName(log),
         log.areaName,
         log.status,
         log.reason,
       ].join(' ').toLowerCase().contains(query);
     }).toList();
   }
+
+  bool _matchesPeriod(DateTime timestamp) {
+    final now = DateTime.now();
+    switch (_period) {
+      case 'today':
+        return _sameDay(timestamp, now);
+      case 'week':
+        return timestamp.isAfter(now.subtract(const Duration(days: 7)));
+      case 'month':
+        return timestamp.year == now.year && timestamp.month == now.month;
+      default:
+        return true;
+    }
+  }
+
+  List<String> _roomOptions(List<AccessLog> logs) {
+    final rooms = {
+      ...commandCenterRoomNames,
+      ...logs
+          .map((log) => log.areaName.trim())
+          .where((room) => room.isNotEmpty),
+    }.toList()..sort();
+    return ['all', ...rooms];
+  }
+
+  Future<void> _pickLogDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate ?? DateTime.now(),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() {
+      _selectedDate = picked;
+      _period = 'all';
+    });
+  }
+
+  List<AccessLog> _sampleAccessLogs() {
+    final now = DateTime.now();
+    return [
+      AccessLog(
+        id: 'sample_granted',
+        userId: 'sample_daniel',
+        userName: 'daniel',
+        areaId: 'server_room',
+        areaName: 'Server Room',
+        status: 'granted',
+        reason: 'Sample verified entry',
+        timestamp: now.subtract(const Duration(minutes: 12)),
+        synced: true,
+      ),
+      AccessLog(
+        id: 'sample_denied',
+        userId: '',
+        userName: 'Unknown face',
+        areaId: 'server_room',
+        areaName: 'Server Room',
+        status: 'denied',
+        reason: 'Sample denied entry',
+        timestamp: now.subtract(const Duration(minutes: 4)),
+        synced: true,
+      ),
+    ];
+  }
+}
+
+class _AccessLogPanel extends StatelessWidget {
+  const _AccessLogPanel({
+    required this.child,
+    this.padding = const EdgeInsets.all(14),
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: CorporateColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: CorporateColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: CorporateColors.lightBlue.withValues(alpha: .2),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(padding: padding, child: child),
+    );
+  }
+}
+
+class _PeriodChip extends StatelessWidget {
+  const _PeriodChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+    );
+  }
+}
+
+class _AccessStatusBadge extends StatelessWidget {
+  const _AccessStatusBadge({required this.log});
+
+  final AccessLog log;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = log.granted
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFE11D48);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .1),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: .3)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        child: Text(
+          log.granted ? 'Granted' : 'Denied',
+          style: TextStyle(color: color, fontWeight: FontWeight.w900),
+        ),
+      ),
+    );
+  }
+}
+
+String _logUserName(AccessLog log) {
+  final name = log.userName.trim();
+  if (name.isEmpty || log.isUnknownFace) return 'Unknown face';
+  return name;
 }
 
 class _TimelineRow extends StatelessWidget {
@@ -2495,10 +3776,7 @@ class _TimelineRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            log.status.toUpperCase(),
-            style: TextStyle(color: color, fontWeight: FontWeight.w900),
-          ),
+          _AccessStatusBadge(log: log),
         ],
       ),
     );
@@ -2561,7 +3839,7 @@ void _showSecurityDetail(BuildContext context, AccessLog log) {
                   ),
                 ),
               const SizedBox(height: 12),
-              _DetailLine(label: 'Status', value: log.status.toUpperCase()),
+              _DetailLine(label: 'Result', value: log.status.toUpperCase()),
               _DetailLine(label: 'User', value: log.userName),
               _DetailLine(label: 'Room', value: log.areaName),
               _DetailLine(
@@ -2652,7 +3930,7 @@ class _UserDataArchiveTabState extends State<_UserDataArchiveTab> {
                       setState(() => _filter = _ArchiveFilter.approvals),
                 ),
                 _ArchiveFilterToggle(
-                  label: 'Face Pending',
+                  label: 'Face Setup',
                   count: users.where((user) => !user.hasFace).length,
                   selected: _filter == _ArchiveFilter.facePending,
                   onTap: () =>
@@ -2913,6 +4191,24 @@ class _UserDeepDetailPage extends StatelessWidget {
                           ),
                         ],
                       ),
+                      const SizedBox(height: 14),
+                      _DetailLine(label: 'Email', value: user.email),
+                      _DetailLine(label: 'Phone', value: user.phone),
+                      _DetailLine(label: 'Role', value: user.roleLabel),
+                      _DetailLine(
+                        label: user.position.trim().toLowerCase() == 'staff'
+                            ? 'Department'
+                            : 'Programme',
+                        value: user.department,
+                      ),
+                      _DetailLine(
+                        label: 'Created',
+                        value: _preciseDate(user.createdAt),
+                      ),
+                      _DetailLine(
+                        label: 'Rooms',
+                        value: user.assignedRoomsLabel,
+                      ),
                     ],
                   ),
                 ),
@@ -2950,129 +4246,194 @@ class _UserDeepDetailPage extends StatelessWidget {
 }
 
 class _SettingsTab extends StatelessWidget {
-  const _SettingsTab({required this.onSignOut});
+  const _SettingsTab({
+    required this.onSignOut,
+    required this.darkMode,
+    required this.language,
+    required this.text,
+    required this.onDarkModeChanged,
+    required this.onLanguageChanged,
+  });
 
   final Future<void> Function() onSignOut;
+  final bool darkMode;
+  final String language;
+  final _AdminText text;
+  final ValueChanged<bool> onDarkModeChanged;
+  final ValueChanged<String> onLanguageChanged;
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final system = context.watch<SystemProvider>();
     final user = auth.user;
-    final settings = system.settings;
+    final adminName = user?.name.trim().isNotEmpty == true
+        ? user!.name.trim()
+        : 'admin';
+    final adminEmail = user?.email.trim().isNotEmpty == true
+        ? user!.email.trim()
+        : 'admin@gmail.com';
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        GlassCard(
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const CircleAvatar(child: Icon(Icons.person_rounded)),
-            title: Text(
-              user?.name ?? 'Administrator',
-              style: const TextStyle(fontWeight: FontWeight.w900),
-            ),
-            subtitle: Text(
-              '${user?.email ?? ''}\nRole: ${user?.roleLabel ?? 'Admin'}',
-            ),
-            trailing: user?.hasFace == true
-                ? const Icon(Icons.verified_rounded)
-                : const Icon(Icons.warning_rounded),
+        Text(
+          'SETTINGS',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0,
+            color: CorporateColors.text,
           ),
         ),
-        const SizedBox(height: 12),
-        SwitchListTile(
-          value: settings.globalLockdown,
-          onChanged: system.toggleLockdown,
-          title: const Text('Global Lockdown'),
-          secondary: const Icon(Icons.emergency_rounded),
-        ),
-        SwitchListTile(
-          value: settings.afterHoursAlerts,
-          onChanged: system.toggleAfterHoursAlerts,
-          title: const Text('After-hours Alerts'),
-          secondary: const Icon(Icons.notifications_active_rounded),
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: DropdownButtonFormField<int>(
-                initialValue: settings.afterHoursStart,
-                decoration: const InputDecoration(labelText: 'Alert Start'),
-                items: List.generate(
-                  24,
-                  (hour) =>
-                      DropdownMenuItem(value: hour, child: Text('$hour:00')),
+        const SizedBox(height: 14),
+        _SettingsPanel(
+          title: text.myAccount,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                adminName,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
                 ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                adminEmail,
+                style: const TextStyle(
+                  color: CorporateColors.mutedText,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  OutlinedButton(
+                    onPressed: auth.loading
+                        ? null
+                        : () => _sendPasswordReset(context),
+                    child: Text(text.changePassword),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => _showEditEmailNotice(context),
+                    child: Text(text.editEmail),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _SettingsPanel(
+          title: text.display,
+          child: Column(
+            children: [
+              SwitchListTile(
+                value: darkMode,
+                onChanged: onDarkModeChanged,
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  text.darkMode,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: language,
+                decoration: InputDecoration(labelText: text.language),
+                items: const [
+                  DropdownMenuItem(value: 'English', child: Text('English')),
+                  DropdownMenuItem(value: 'Malay', child: Text('Malay')),
+                ],
                 onChanged: (value) {
-                  if (value != null) {
-                    system.updateAfterHours(
-                      start: value,
-                      end: settings.afterHoursEnd,
-                    );
-                  }
+                  if (value != null) onLanguageChanged(value);
                 },
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: DropdownButtonFormField<int>(
-                initialValue: settings.afterHoursEnd,
-                decoration: const InputDecoration(labelText: 'Alert End'),
-                items: List.generate(
-                  24,
-                  (hour) =>
-                      DropdownMenuItem(value: hour, child: Text('$hour:00')),
-                ),
-                onChanged: (value) {
-                  if (value != null) {
-                    system.updateAfterHours(
-                      start: settings.afterHoursStart,
-                      end: value,
-                    );
-                  }
-                },
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
-        const SizedBox(height: 12),
-        _SettingTile(
-          icon: Icons.face_retouching_natural_rounded,
-          title: 'Identity Enrollment',
-          onTap: () =>
-              Navigator.pushNamed(context, FaceRegistrationScreen.route),
-        ),
-        _SettingTile(
-          icon: Icons.notifications_active_rounded,
-          title: 'Notifications',
-          onTap: () => Navigator.pushNamed(context, NotificationsScreen.route),
-        ),
-        _SettingTile(
-          icon: Icons.center_focus_strong_rounded,
-          title: 'Run Scanner',
-          onTap: () => Navigator.pushNamed(context, FaceLoginScreen.route),
-        ),
-        const SizedBox(height: 12),
-        FilledButton.tonalIcon(
+        const SizedBox(height: 18),
+        FilledButton.icon(
           onPressed: auth.loading ? null : onSignOut,
           icon: const Icon(Icons.logout_rounded),
-          label: const Text('Sign Out'),
+          label: Text(text.signOut),
         ),
       ],
     );
   }
+
+  Future<void> _sendPasswordReset(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final auth = context.read<AuthProvider>();
+    final ok = await auth.sendPasswordReset();
+    if (!context.mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          ok ? text.passwordSent : auth.error ?? text.passwordFailed,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showEditEmailNotice(BuildContext context) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(text.editEmail),
+        content: Text(text.editEmailNotice),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(text.close),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-class _SettingTile extends StatelessWidget {
-  const _SettingTile({required this.icon, required this.title, this.onTap});
+class _SettingsPanel extends StatelessWidget {
+  const _SettingsPanel({required this.title, required this.child});
 
-  final IconData icon;
   final String title;
-  final VoidCallback? onTap;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(leading: Icon(icon), title: Text(title), onTap: onTap);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: CorporateColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: CorporateColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: CorporateColors.lightBlue.withValues(alpha: .22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                color: CorporateColors.mutedText,
+              ),
+            ),
+            const SizedBox(height: 12),
+            child,
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -3096,7 +4457,7 @@ class _CompactLogLine extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                '${DateFormat.Hms().format(log.timestamp)}  ${log.userName}  ${log.status}',
+                '${DateFormat.jm().format(log.timestamp)}  ${log.userName}  ${log.status}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -3182,23 +4543,6 @@ bool _sameDay(DateTime left, DateTime right) =>
     left.month == right.month &&
     left.day == right.day;
 
-DateTime _workWeekStart() {
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  return today.subtract(Duration(days: today.weekday - DateTime.monday));
-}
-
-double _chartMaxY(List<AccessLog> logs) {
-  var maxCount = 10;
-  final start = _workWeekStart();
-  for (var i = 0; i < 5; i++) {
-    final day = start.add(Duration(days: i));
-    final count = logs.where((log) => _sameDay(log.timestamp, day)).length;
-    if (count > maxCount) maxCount = count;
-  }
-  return (((maxCount + 9) ~/ 10) * 10).toDouble();
-}
-
 String _roomLabel(Area area) {
   final name = area.name.trim();
   if (name.isNotEmpty) return name;
@@ -3229,6 +4573,19 @@ List<String> _dedupeRooms(Iterable<String> values) {
 bool _sameAccessTarget(String left, String right) =>
     _accessKey(left) == _accessKey(right);
 
+String _roomSubtitle(Area area) {
+  final floor = area.floor.trim().isEmpty
+      ? 'Unassigned floor'
+      : area.floor.trim();
+  final room = area.roomNumber.trim().isEmpty
+      ? ''
+      : ' | Room ${area.roomNumber.trim()}';
+  final location = area.location.trim().isEmpty
+      ? ''
+      : ' | ${area.location.trim()}';
+  return 'Floor: $floor$room$location';
+}
+
 String _accessKey(String value) =>
     value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
 
@@ -3257,6 +4614,23 @@ List<AccessLog> _occupantLogs(Area area, List<AccessLog> logs) {
     latest.putIfAbsent(key, () => log);
   }
   return latest.values.toList();
+}
+
+String _dashboardRoomSummary(List<Area> areas) {
+  if (areas.isEmpty) return 'No rooms linked';
+  final preferred = <Area>[];
+  for (final target in ['General Office', 'Server Room 1']) {
+    for (final area in areas) {
+      if (_accessKey(_roomLabel(area)) == _accessKey(target)) {
+        preferred.add(area);
+        break;
+      }
+    }
+  }
+  final source = preferred.isEmpty ? areas.take(2).toList() : preferred;
+  return source
+      .map((area) => '${_roomLabel(area)} : ${area.currentOccupancy}')
+      .join(' | ');
 }
 
 DateTime _latestRoomLogTime(Area area, List<AccessLog> logs) {

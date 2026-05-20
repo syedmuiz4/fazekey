@@ -58,17 +58,17 @@ void main() {
     expect(settings.shouldDenyScanAt(DateTime(2026, 5, 5, 13, 12)), isTrue);
   });
 
-  test('admin role bypasses operational timing restrictions', () {
+  test('operational timing restrictions apply to every role', () {
     final settings = SystemSettings.defaults().copyWith(afterHoursAlerts: true);
     final afterHours = DateTime(2026, 5, 5, 13, 12);
 
     expect(settings.shouldDenyScanForRole('user', afterHours), isTrue);
-    expect(settings.shouldDenyScanForRole('admin', afterHours), isFalse);
-    expect(settings.shouldDenyScanForRole('Admin', afterHours), isFalse);
+    expect(settings.shouldDenyScanForRole('admin', afterHours), isTrue);
+    expect(settings.shouldDenyScanForRole('Admin', afterHours), isTrue);
   });
 
   test(
-    'room ACL user category maps legacy roles and revoke overrides access',
+    'room ACL user category maps legacy roles and explicit revocation wins',
     () {
       final user = AppUser(
         id: 'user-1',
@@ -111,7 +111,7 @@ void main() {
     },
   );
 
-  test('room capacity blocks non-privileged users when full', () {
+  test('room capacity blocks users when full', () {
     final user = AppUser(
       id: 'user-1',
       identityNumber: 'AI220001',
@@ -141,11 +141,11 @@ void main() {
     );
 
     expect(user.canAccessArea(fullArea), isFalse);
-    expect(admin.canAccessArea(fullArea), isTrue);
-    expect(user.copyWith(role: ' admin ').canAccessArea(fullArea), isTrue);
+    expect(admin.canAccessArea(fullArea), isFalse);
+    expect(user.copyWith(role: ' admin ').canAccessArea(fullArea), isFalse);
   });
 
-  test('admin registered access bypasses room match and capacity checks', () {
+  test('admin registered access requires room match and capacity checks', () {
     final admin = AppUser(
       id: 'admin-1',
       identityNumber: 'AD220001',
@@ -174,10 +174,10 @@ void main() {
     );
 
     expect(admin.isRegisteredForArea(fullArea), isFalse);
-    expect(admin.canAccessRegisteredArea(fullArea), isTrue);
+    expect(admin.canAccessRegisteredArea(fullArea), isFalse);
     expect(
       admin.copyWith(role: ' admin ').canAccessRegisteredArea(fullArea),
-      isTrue,
+      isFalse,
     );
   });
 
@@ -246,7 +246,7 @@ void main() {
     expect(user.canAccessRegisteredArea(area), isFalse);
   });
 
-  test('admin bypass ignores approval status and room checks', () {
+  test('admin role does not ignore approval status and room checks', () {
     final admin = AppUser(
       id: 'admin-1',
       identityNumber: 'AD220001',
@@ -275,8 +275,8 @@ void main() {
       capacity: 20,
     );
 
-    expect(admin.canAccessArea(inactiveArea), isTrue);
-    expect(admin.canAccessRegisteredArea(inactiveArea), isTrue);
+    expect(admin.canAccessArea(inactiveArea), isFalse);
+    expect(admin.canAccessRegisteredArea(inactiveArea), isFalse);
   });
 
   test(

@@ -67,6 +67,10 @@ class AuthProvider extends ChangeNotifier {
     return _guard(() async {
       final cred = await _firebase.login(email, password);
       user = await _firebase.getUser(cred.user!.uid);
+      final profile = user;
+      if (profile != null) {
+        unawaited(_firebase.recordAppLogin(profile).catchError((_) {}));
+      }
     });
   }
 
@@ -105,6 +109,15 @@ class AuthProvider extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      final profile = user;
+      if (profile != null) {
+        try {
+          await _firebase.closeActiveRoomSessionForUser(profile);
+          await _firebase.recordAppLogout(profile);
+        } catch (_) {
+          // Authentication sign-out should still complete if audit sync is delayed.
+        }
+      }
       await _firebase.signOut();
       user = null;
       return true;

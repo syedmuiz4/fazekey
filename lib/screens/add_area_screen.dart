@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../constants/command_center_options.dart';
 import '../models/area.dart';
 import '../providers/area_provider.dart';
 import '../providers/auth_provider.dart';
@@ -51,12 +52,12 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: const Text('Linked Rooms'),
+          title: const Text('Add Rooms'),
           backgroundColor: Colors.transparent,
           actions: [
             IconButton(
-              tooltip: 'Add row',
-              onPressed: _addDraft,
+              tooltip: 'Add another room',
+              onPressed: provider.loading ? null : _addDraft,
               icon: const Icon(Icons.playlist_add_rounded),
             ),
           ],
@@ -79,7 +80,7 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
                   ),
                 ),
               OutlinedButton.icon(
-                onPressed: _addDraft,
+                onPressed: provider.loading ? null : _addDraft,
                 icon: const Icon(Icons.add_rounded),
                 label: const Text('Add Another Room'),
               ),
@@ -99,7 +100,11 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.save_rounded),
-                label: Text(provider.loading ? 'Saving' : 'Save Changes'),
+                label: Text(
+                  provider.loading
+                      ? 'Saving'
+                      : 'Save ${_drafts.length} Room${_drafts.length == 1 ? '' : 's'}',
+                ),
               ),
             ],
           ),
@@ -113,6 +118,7 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
   }
 
   void _removeDraft(int index) {
+    if (_drafts.length == 1) return;
     final draft = _drafts.removeAt(index);
     draft.dispose();
     setState(() {});
@@ -121,15 +127,29 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
   Future<void> _saveAll() async {
     if (!_form.currentState!.validate()) return;
     final provider = context.read<AreaProvider>();
-    for (final draft in _drafts) {
+    for (final draft in List<_RoomDraft>.of(_drafts)) {
       await provider.addArea(draft.toArea());
       if (provider.error != null) break;
     }
     if (!mounted || provider.error != null) return;
+    final count = _drafts.length;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${_drafts.length} room assets saved.')),
+      SnackBar(
+        content: Text(
+          '$count room${count == 1 ? '' : 's'} added to Room Control.',
+        ),
+      ),
     );
     Navigator.pop(context);
+  }
+
+  static String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
+
+  static String? _capacityValidator(String? value) {
+    final parsed = int.tryParse(value?.trim() ?? '');
+    if (parsed == null || parsed < 0) return 'Enter a valid capacity';
+    return null;
   }
 }
 
@@ -143,14 +163,14 @@ class _AddRoomsHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Linked Rooms',
+            'Batch Room Creation',
             style: Theme.of(
               context,
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 4),
           Text(
-            'Register multiple linked room profiles in one save operation.',
+            'Add one or many room profiles before saving them to Firestore.',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
@@ -158,6 +178,37 @@ class _AddRoomsHeader extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _RoomDraft {
+  final name = TextEditingController();
+  final floor = TextEditingController();
+  final capacity = TextEditingController(text: '25');
+  String department = commandCenterDepartments.first;
+  final Set<String> roles = {'Student', 'Staff'};
+
+  Area toArea() {
+    final roomName = name.text.trim();
+    return Area(
+      id: '',
+      name: roomName,
+      location: 'FAZEKEY Command Center',
+      floor: floor.text.trim(),
+      roomNumber: roomName,
+      active: true,
+      createdAt: DateTime.now(),
+      allowedDepartments: [department],
+      allowedRoles: roles.toList(),
+      currentOccupancy: 0,
+      capacity: int.tryParse(capacity.text.trim()) ?? 0,
+    );
+  }
+
+  void dispose() {
+    name.dispose();
+    floor.dispose();
+    capacity.dispose();
   }
 }
 
@@ -179,11 +230,9 @@ class _RoomDraftCard extends StatefulWidget {
 }
 
 class _RoomDraftCardState extends State<_RoomDraftCard> {
-  int get index => widget.index;
-  _RoomDraft get draft => widget.draft;
-
   @override
   Widget build(BuildContext context) {
+    final draft = widget.draft;
     return GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -192,57 +241,74 @@ class _RoomDraftCardState extends State<_RoomDraftCard> {
             children: [
               Expanded(
                 child: Text(
-                  'Room Profile ${index + 1}',
-                  style: const TextStyle(fontWeight: FontWeight.w900),
+                  'Room ${widget.index + 1}',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
-              IconButton(
-                tooltip: 'Remove room profile',
-                onPressed: widget.canRemove ? widget.onRemove : null,
-                icon: const Icon(Icons.delete_outline_rounded),
-              ),
+              if (widget.canRemove)
+                IconButton(
+                  tooltip: 'Remove room',
+                  onPressed: widget.onRemove,
+                  icon: const Icon(Icons.delete_rounded),
+                ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           TextFormField(
-            controller: draft.location,
-            decoration: const InputDecoration(labelText: 'Location'),
-            validator: _required,
+            controller: draft.name,
+            decoration: const InputDecoration(
+              labelText: 'Room Name',
+              prefixIcon: Icon(Icons.meeting_room_rounded),
+            ),
+            validator: _AddAreaScreenState._required,
           ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: TextFormField(
-                  controller: draft.floor,
-                  decoration: const InputDecoration(labelText: 'Floor'),
-                  validator: _required,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: TextFormField(
-                  controller: draft.room,
-                  decoration: const InputDecoration(labelText: 'Room'),
-                  validator: _required,
-                ),
-              ),
-            ],
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: draft.floor,
+            decoration: const InputDecoration(
+              labelText: 'Floor Label',
+              prefixIcon: Icon(Icons.layers_rounded),
+            ),
+            validator: _AddAreaScreenState._required,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           TextFormField(
             controller: draft.capacity,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Occupancy Capacity'),
-            validator: _capacityValidator,
+            decoration: const InputDecoration(
+              labelText: 'Capacity',
+              prefixIcon: Icon(Icons.groups_rounded),
+            ),
+            validator: _AddAreaScreenState._capacityValidator,
           ),
-          const SizedBox(height: 10),
-          TextFormField(
-            controller: draft.department,
-            decoration: const InputDecoration(labelText: 'Department'),
-            validator: _required,
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: draft.department,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Department',
+              prefixIcon: Icon(Icons.school_rounded),
+            ),
+            items: commandCenterDepartments
+                .map(
+                  (department) => DropdownMenuItem(
+                    value: department,
+                    child: Text(
+                      department,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => draft.department = value);
+            },
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           _RolePolicySelector(
             selected: draft.roles,
             onChanged: (roles) {
@@ -256,15 +322,6 @@ class _RoomDraftCardState extends State<_RoomDraftCard> {
         ],
       ),
     );
-  }
-
-  static String? _required(String? value) =>
-      value == null || value.trim().isEmpty ? 'Required' : null;
-
-  static String? _capacityValidator(String? value) {
-    final parsed = int.tryParse(value?.trim() ?? '');
-    if (parsed == null || parsed < 0) return 'Enter a valid capacity';
-    return null;
   }
 }
 
@@ -300,6 +357,12 @@ class _RolePolicySelector extends StatelessWidget {
               label: const Text('Staff'),
               onSelected: (value) => _toggle('Staff', value),
             ),
+            FilterChip(
+              selected: selected.contains('Admin'),
+              avatar: const Icon(Icons.admin_panel_settings_rounded),
+              label: const Text('Admins'),
+              onSelected: (value) => _toggle('Admin', value),
+            ),
           ],
         ),
       ],
@@ -310,42 +373,5 @@ class _RolePolicySelector extends StatelessWidget {
     final next = {...selected}..remove(role);
     if (selectedValue) next.add(role);
     onChanged(next);
-  }
-}
-
-class _RoomDraft {
-  _RoomDraft();
-
-  final location = TextEditingController(text: 'FSKTM');
-  final floor = TextEditingController(text: 'Level 1');
-  final room = TextEditingController();
-  final capacity = TextEditingController(text: '25');
-  final department = TextEditingController(text: 'Software Engineering');
-  final roles = <String>{'Student'};
-
-  Area toArea() {
-    final floorValue = floor.text.trim();
-    final roomValue = room.text.trim();
-    return Area(
-      id: '',
-      name: '$floorValue - Room $roomValue',
-      location: location.text.trim(),
-      floor: floorValue,
-      roomNumber: roomValue,
-      active: true,
-      createdAt: DateTime.now(),
-      allowedDepartments: [department.text.trim()],
-      allowedRoles: roles.toList(),
-      currentOccupancy: 0,
-      capacity: int.tryParse(capacity.text.trim()) ?? 0,
-    );
-  }
-
-  void dispose() {
-    location.dispose();
-    floor.dispose();
-    room.dispose();
-    capacity.dispose();
-    department.dispose();
   }
 }

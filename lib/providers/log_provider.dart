@@ -89,7 +89,7 @@ class LogProvider extends ChangeNotifier {
         await _firebase.syncEncodedLog(row);
         await _localDb.deletePendingLog(row['id'] as String);
       } catch (e) {
-        error = 'Pending log sync paused: $e';
+        error = 'Offline log sync paused: $e';
         break;
       }
     }

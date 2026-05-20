@@ -1,11 +1,13 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
+import '../constants/command_center_options.dart';
 import '../models/app_user.dart';
 import '../providers/auth_provider.dart';
 import '../services/firebase_service.dart';
@@ -163,7 +165,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _matricNo.text = user.identityNumber.trim().isEmpty
         ? user.id
         : user.identityNumber.trim();
-    _course.text = user.course.trim().isEmpty ? user.department : user.course;
+    final department = user.department.trim().isEmpty
+        ? user.course.trim()
+        : user.department.trim();
+    final fixedDepartments = commandCenterDepartments
+        .where((department) => department != 'Other...')
+        .toList();
+    _course.text = fixedDepartments.contains(department)
+        ? department
+        : fixedDepartments.first;
     _faculty.text = user.faculty.trim().isEmpty ? 'FSKTM' : user.faculty;
     final accountEmail = _firebase.currentUserEmail;
     _email.text = accountEmail?.trim().isNotEmpty == true
@@ -263,6 +273,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       await _firebase.updateUserProfile(
         current.copyWith(
           name: _name.text,
+          department: _course.text.trim(),
+          course: _course.text.trim(),
           phone: _phone.text,
           homeAddress: _homeAddress.text,
           emergencyContact: _emergencyContact.text,
@@ -286,7 +298,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   String? _profilePhotoBlockReason(AppUser user) {
     if (user.hasPendingPhotoApproval) {
-      return 'Profile picture request is pending admin approval.';
+      return 'Profile picture request is waiting for admin review.';
     }
     final now = DateTime.now();
     final lastChange = user.photoUpdatedAt ?? user.photoChangeRequestedAt;
@@ -366,7 +378,7 @@ class _ProfileForm extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         user.email.isEmpty
-                            ? 'Official email pending'
+                            ? 'Official email not set'
                             : user.email,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -420,13 +432,34 @@ class _ProfileForm extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextFormField(
-                    controller: course,
-                    readOnly: true,
+                  DropdownButtonFormField<String>(
+                    initialValue:
+                        commandCenterDepartments
+                            .where((department) => department != 'Other...')
+                            .contains(course.text)
+                        ? course.text
+                        : commandCenterDepartments.first,
+                    isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Course',
+                      labelText: 'Department',
                       prefixIcon: Icon(Icons.school_rounded),
                     ),
+                    items: commandCenterDepartments
+                        .where((department) => department != 'Other...')
+                        .map(
+                          (department) => DropdownMenuItem(
+                            value: department,
+                            child: Text(
+                              department,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) course.text = value;
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -440,7 +473,8 @@ class _ProfileForm extends StatelessWidget {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: phone,
-                    keyboardType: TextInputType.phone,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     decoration: const InputDecoration(
                       labelText: 'Phone Number',
                       prefixIcon: Icon(Icons.phone_rounded),
@@ -460,7 +494,8 @@ class _ProfileForm extends StatelessWidget {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: emergencyContact,
-                    keyboardType: TextInputType.phone,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     decoration: const InputDecoration(
                       labelText: 'Emergency Contact',
                       prefixIcon: Icon(Icons.contact_emergency_rounded),

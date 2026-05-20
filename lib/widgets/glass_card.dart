@@ -1,6 +1,6 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
+
+import 'corporate_chrome.dart';
 
 class GlassCard extends StatelessWidget {
   const GlassCard({
@@ -16,24 +16,42 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Material(
-          color: Colors.white.withValues(alpha: .72),
-          child: InkWell(
-            onTap: onTap,
-            child: Container(
-              padding: padding,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: const Color(0xFFBAE6FD).withValues(alpha: .78),
-                ),
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final surface = dark
+        ? Theme.of(context).colorScheme.surfaceContainerHighest
+        : CorporateColors.surface;
+    final border = dark
+        ? Theme.of(context).colorScheme.outlineVariant
+        : CorporateColors.border;
+    final shadow = dark
+        ? Colors.black.withValues(alpha: .18)
+        : CorporateColors.lightBlue.withValues(alpha: .22);
+    return Material(
+      color: surface,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: border),
+            boxShadow: [
+              BoxShadow(
+                color: shadow,
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
-              child: child,
-            ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              child,
+              const SizedBox(height: 14),
+              const DashedDivider(),
+            ],
           ),
         ),
       ),

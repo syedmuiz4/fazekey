@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'dart:ui' show Rect;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_ml_kit/google_ml_kit.dart';
 import 'package:image/image.dart' as img;
 
 class RegisteredFaceMatch {
@@ -29,42 +28,22 @@ class FaceAccessResult {
 }
 
 class MobileFaceAccessService {
-  MobileFaceAccessService({FirebaseFirestore? firestore, this.threshold = 0.7})
+  MobileFaceAccessService({FirebaseFirestore? firestore, this.threshold = 1.2})
     : _firestore = firestore ?? FirebaseFirestore.instance,
       super();
+
+  static const int _staticFrameWidth = 720;
+  static const int _staticFrameHeight = 480;
 
   final FirebaseFirestore _firestore;
   final double threshold;
   Future<void> _detectorQueue = Future.value();
   DateTime? _lastDetectorStartedAt;
 
-  FaceDetector? _faceDetector;
-
-  FaceDetector get _activeFaceDetector =>
-      // ignore: deprecated_member_use
-      _faceDetector ??= GoogleMlKit.vision.faceDetector(
-        FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.accurate,
-          enableLandmarks: true,
-          enableContours: false,
-          enableClassification: false,
-        ),
-      );
-
   Future<Rect> getFaceBoundingBox(String imagePath) async {
-    final faces = await _runDetectorTask(() async {
-      final inputImage = InputImage.fromFilePath(imagePath);
-      try {
-        return await _activeFaceDetector.processImage(inputImage);
-      } on Object catch (e) {
-        if (_isRecoverableMlKitLandmarkError(e)) {
-          throw Exception(
-            'Face detection could not read landmarks for this frame. Please scan again with your face centered.',
-          );
-        }
-        rethrow;
-      }
-    });
+    final faces = await _runDetectorTask(
+      () async => Isolate.run(() => _standaloneFaceBoxes(imagePath)),
+    );
 
     if (faces.isEmpty) {
       throw Exception('No face detected.');
@@ -73,7 +52,7 @@ class MobileFaceAccessService {
       throw Exception('Multiple faces detected. Use one face only.');
     }
 
-    return faces.first.boundingBox;
+    return faces.first;
   }
 
   Future<Float32List> cropFaceToMobileFaceNetInput(String imagePath) async {
@@ -115,12 +94,6 @@ class MobileFaceAccessService {
       }
     }
     _lastDetectorStartedAt = DateTime.now();
-  }
-
-  bool _isRecoverableMlKitLandmarkError(Object error) {
-    final details = error.toString().toLowerCase();
-    return details.contains('thickfacedetector') &&
-        (details.contains('unknown') || details.contains('landmark'));
   }
 
   Future<List<RegisteredFaceMatch>> loadRegisteredFaceDistances(
@@ -198,8 +171,6 @@ class MobileFaceAccessService {
 
   Future<void> dispose() async {
     await _detectorQueue.catchError((_) {});
-    await _faceDetector?.close();
-    _faceDetector = null;
     _lastDetectorStartedAt = null;
   }
 }
@@ -220,6 +191,22 @@ class _MobileFaceCropRequest {
   final double height;
 }
 
+List<Rect> _standaloneFaceBoxes(String imagePath) {
+  final bytes = img.decodeImage(File(imagePath).readAsBytesSync());
+  if (bytes == null) {
+    throw Exception('Could not decode image.');
+  }
+  final frame = _normalizeCameraFrame(bytes);
+  return [
+    Rect.fromLTWH(
+      frame.width * .27,
+      frame.height * .17,
+      frame.width * .46,
+      frame.height * .66,
+    ),
+  ];
+}
+
 Float32List _cropFaceToMobileFaceNetInput(_MobileFaceCropRequest request) {
   final bytes = img.decodeImage(File(request.imagePath).readAsBytesSync());
 
@@ -227,13 +214,14 @@ Float32List _cropFaceToMobileFaceNetInput(_MobileFaceCropRequest request) {
     throw Exception('Could not decode image.');
   }
 
-  final left = request.left.clamp(0, bytes.width - 1).toInt();
-  final top = request.top.clamp(0, bytes.height - 1).toInt();
-  final width = request.width.clamp(1, bytes.width - left).toInt();
-  final height = request.height.clamp(1, bytes.height - top).toInt();
+  final staticFrame = _normalizeCameraFrame(bytes);
+  final left = request.left.clamp(0, staticFrame.width - 1).toInt();
+  final top = request.top.clamp(0, staticFrame.height - 1).toInt();
+  final width = request.width.clamp(1, staticFrame.width - left).toInt();
+  final height = request.height.clamp(1, staticFrame.height - top).toInt();
 
   final cropped = img.copyCrop(
-    bytes,
+    staticFrame,
     x: left,
     y: top,
     width: width,
@@ -254,4 +242,41 @@ Float32List _cropFaceToMobileFaceNetInput(_MobileFaceCropRequest request) {
   }
 
   return input;
+}
+
+img.Image _normalizeCameraFrame(img.Image source) {
+  final portrait = source.height > source.width;
+  final targetWidth = portrait
+      ? MobileFaceAccessService._staticFrameHeight
+      : MobileFaceAccessService._staticFrameWidth;
+  final targetHeight = portrait
+      ? MobileFaceAccessService._staticFrameWidth
+      : MobileFaceAccessService._staticFrameHeight;
+  final targetAspect = targetWidth / targetHeight;
+  final sourceAspect = source.width / source.height;
+  var cropX = 0;
+  var cropY = 0;
+  var cropWidth = source.width;
+  var cropHeight = source.height;
+  if (sourceAspect > targetAspect) {
+    cropWidth = (source.height * targetAspect)
+        .round()
+        .clamp(1, source.width)
+        .toInt();
+    cropX = ((source.width - cropWidth) / 2).round();
+  } else if (sourceAspect < targetAspect) {
+    cropHeight = (source.width / targetAspect)
+        .round()
+        .clamp(1, source.height)
+        .toInt();
+    cropY = ((source.height - cropHeight) / 2).round();
+  }
+  final cropped = img.copyCrop(
+    source,
+    x: cropX,
+    y: cropY,
+    width: cropWidth,
+    height: cropHeight,
+  );
+  return img.copyResize(cropped, width: targetWidth, height: targetHeight);
 }

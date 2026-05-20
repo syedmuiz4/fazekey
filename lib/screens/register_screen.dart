@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../models/area.dart';
-import '../providers/area_provider.dart';
+import '../constants/command_center_options.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
@@ -24,10 +24,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _phone = TextEditingController();
+  final _customDepartment = TextEditingController();
   String _role = 'User';
   String _position = 'Student';
   int _level = 1;
-  String? _department;
+  String _department = commandCenterDepartments.first;
 
   @override
   void dispose() {
@@ -36,17 +37,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _email.dispose();
     _password.dispose();
     _phone.dispose();
+    _customDepartment.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    final areas = context.watch<AreaProvider>().areas;
-    final departmentOptions = _departmentsForLevel(areas, _level);
-    final selectedDepartment = _selectedOption(departmentOptions, _department);
+    const departmentOptions = commandCenterDepartments;
+    final selectedDepartment = _selectedDepartment;
     final adminRoleSelected = _role.trim().toLowerCase() == 'admin';
-    _syncSelection(department: selectedDepartment);
     return AppBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -96,9 +96,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
                         key: ValueKey(
-                          'register-department-$_level-$selectedDepartment',
+                          'register-department-$_level-$_department',
                         ),
-                        initialValue: selectedDepartment,
+                        initialValue: _department,
                         isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Department',
@@ -116,13 +116,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               ),
                             )
                             .toList(),
-                        onChanged: (value) =>
-                            setState(() => _department = value),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _department = value);
+                          }
+                        },
                       ),
+                      if (_department == 'Other...') ...[
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _customDepartment,
+                          decoration: const InputDecoration(
+                            labelText: 'Custom Department',
+                          ),
+                          validator: _required,
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _phone,
-                        keyboardType: TextInputType.phone,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
                         decoration: const InputDecoration(labelText: 'Phone'),
                         validator: _required,
                       ),
@@ -187,10 +203,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           textFor: (level) => 'Level $level',
                           onChanged: (level) => setState(() {
                             _level = level;
-                            _department = _firstDepartmentForLevel(
-                              areas,
-                              level,
-                            );
+                            _department = commandCenterDepartments.first;
                             _level = level;
                           }),
                         ),
@@ -216,7 +229,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 name: _name.text,
                                 email: _email.text,
                                 password: _password.text,
-                                department: selectedDepartment ?? '',
+                                department: selectedDepartment,
                                 phone: _phone.text,
                                 room: '',
                                 rooms: const [],
@@ -249,49 +262,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? _required(String? value) =>
       value == null || value.trim().isEmpty ? 'Required' : null;
 
-  List<String> _departmentsForLevel(List<Area> areas, int level) {
-    final floor = 'Level $level';
-    final departments =
-        areas
-            .where(
-              (area) =>
-                  area.active &&
-                  area.floor.trim().toLowerCase() == floor.toLowerCase(),
-            )
-            .expand((area) => area.allowedDepartments)
-            .map((department) => department.trim())
-            .where((department) => department.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort();
-    return departments.isEmpty ? _fallbackDepartments : departments;
+  String get _selectedDepartment {
+    if (_department == 'Other...') return _customDepartment.text.trim();
+    return _department;
   }
-
-  String? _firstDepartmentForLevel(List<Area> areas, int level) {
-    final options = _departmentsForLevel(areas, level);
-    return options.isEmpty ? null : options.first;
-  }
-
-  String? _selectedOption(List<String> options, String? selected) {
-    if (options.isEmpty) return null;
-    return selected != null && options.contains(selected)
-        ? selected
-        : options.first;
-  }
-
-  void _syncSelection({required String? department}) {
-    if (_department == department) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _department == department) return;
-      setState(() => _department = department);
-    });
-  }
-
-  static const _fallbackDepartments = [
-    'Software Engineering',
-    'Information Security',
-    'Multimedia',
-  ];
 }
 
 class _TextSelector<T> extends StatelessWidget {

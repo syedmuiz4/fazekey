@@ -1,0 +1,1844 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../models/access_grant.dart';
+import '../models/access_log.dart';
+import '../models/app_user.dart';
+import '../models/area.dart';
+import '../models/room_access_record.dart';
+import '../providers/auth_provider.dart';
+import '../services/firebase_service.dart';
+import '../widgets/app_background.dart';
+import 'edit_profile_screen.dart';
+import 'welcome_screen.dart';
+
+class UserDashboardScreen extends StatefulWidget {
+  const UserDashboardScreen({super.key});
+  static const route = '/student_dashboard';
+
+  @override
+  State<UserDashboardScreen> createState() => _UserDashboardScreenState();
+}
+
+class _UserDashboardScreenState extends State<UserDashboardScreen> {
+  int _index = 0;
+  DateTime _clock = DateTime.now();
+  Timer? _timer;
+  bool _nightMode = false;
+  String _language = 'English';
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => setState(() => _clock = DateTime.now()),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = context.watch<AuthProvider>().user;
+    final firebase = context.read<FirebaseService>();
+    final text = _UserText(_language);
+    return AppBackground(
+      child: Scaffold(
+        backgroundColor: _nightMode
+            ? const Color(0xFF0F172A)
+            : Colors.transparent,
+        body: IndexedStack(
+          index: _index,
+          children: [
+            _HomeTab(user: user, firebase: firebase, clock: _clock, text: text),
+            _HistoryTab(user: user, firebase: firebase, text: text),
+            _ProfileTab(user: user, firebase: firebase, text: text),
+            _SettingsTab(
+              user: user,
+              firebase: firebase,
+              text: text,
+              language: _language,
+              nightMode: _nightMode,
+              onLanguageChanged: (value) => setState(() => _language = value),
+              onNightModeChanged: (value) => setState(() => _nightMode = value),
+            ),
+          ],
+        ),
+        bottomNavigationBar: _UserBottomBar(
+          selectedIndex: _index,
+          onChanged: (value) => setState(() => _index = value),
+          text: text,
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeTab extends StatelessWidget {
+  const _HomeTab({
+    required this.user,
+    required this.firebase,
+    required this.clock,
+    required this.text,
+  });
+
+  final AppUser? user;
+  final FirebaseService firebase;
+  final DateTime clock;
+  final _UserText text;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = user?.name.trim().isNotEmpty == true
+        ? user!.name.trim()
+        : 'User';
+    return SafeArea(
+      bottom: false,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 22),
+        children: [
+          _Panel(
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: const Color(0xFFCCFBF1),
+                  child: Text(
+                    displayName.characters.first.toUpperCase(),
+                    style: const TextStyle(
+                      color: Color(0xFF0F766E),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w900,
+                              color: const Color(0xFF0F172A),
+                            ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        text.homeSubtitle,
+                        style: const TextStyle(
+                          color: Color(0xFF64748B),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      DateFormat('d MMM yyyy').format(clock),
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      DateFormat('h:mm:ss a').format(clock),
+                      style: const TextStyle(
+                        color: Color(0xFF0D9488),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _CampusNewsCarousel(firebase: firebase),
+          const SizedBox(height: 14),
+          _CurrentRoomCard(user: user, firebase: firebase, text: text),
+          const SizedBox(height: 14),
+          _HomeRoomActionButton(user: user, firebase: firebase, text: text),
+          const SizedBox(height: 16),
+          Center(
+            child: Opacity(
+              opacity: .5,
+              child: Image.asset(
+                'assets/images/logo2.png',
+                width: 118,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.high,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CampusNewsCarousel extends StatefulWidget {
+  const _CampusNewsCarousel({required this.firebase});
+  final FirebaseService firebase;
+
+  @override
+  State<_CampusNewsCarousel> createState() => _CampusNewsCarouselState();
+}
+
+class _CampusNewsCarouselState extends State<_CampusNewsCarousel> {
+  final _controller = PageController();
+  Timer? _timer;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted || !_controller.hasClients) return;
+      final next = (_index + 1) % _campusNewsCount;
+      _controller.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: widget.firebase.firestore
+          .collection('campusNews')
+          .where('active', isEqualTo: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final news =
+            snapshot.data?.docs.map(_CampusNews.fromDoc).toList() ??
+            const <_CampusNews>[];
+        final visibleItems = _campusNewsWithDefaults(news);
+        return _Panel(
+          child: SizedBox(
+            height: 184,
+            child: Stack(
+              children: [
+                PageView.builder(
+                  controller: _controller,
+                  itemCount: visibleItems.length,
+                  onPageChanged: (value) => setState(() => _index = value),
+                  itemBuilder: (context, page) {
+                    final item = visibleItems[page];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 34),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 280),
+                        curve: Curves.easeOut,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FDFF),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFE0F2FE)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(
+                                0xFF0D9488,
+                              ).withValues(alpha: .08),
+                              blurRadius: 18,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              item.dateLabel,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Color(0xFF0D9488),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 7),
+                            Text(
+                              item.title,
+                              textAlign: TextAlign.center,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: () => _openNewsLink(context, item),
+                              child: const Text(
+                                'Read more',
+                                style: TextStyle(fontWeight: FontWeight.w900),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: IconButton(
+                    onPressed: () => _goTo((_index - 1) % visibleItems.length),
+                    icon: const Icon(Icons.chevron_left_rounded),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: IconButton(
+                    onPressed: () => _goTo((_index + 1) % visibleItems.length),
+                    icon: const Icon(Icons.chevron_right_rounded),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < visibleItems.length; i++)
+                        Container(
+                          width: _index == i ? 18 : 6,
+                          height: 6,
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          decoration: BoxDecoration(
+                            color: _index == i
+                                ? const Color(0xFF0D9488)
+                                : const Color(0xFFBAE6FD),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _goTo(int page) {
+    if (!_controller.hasClients) return;
+    final normalized = page < 0 ? _campusNewsCount - 1 : page;
+    _controller.animateToPage(
+      normalized,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  Future<void> _openNewsLink(BuildContext context, _CampusNews item) async {
+    final link = item.link.trim();
+    if (link.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Full article link is not available yet.'),
+        ),
+      );
+      return;
+    }
+    final uri = Uri.tryParse(link);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+}
+
+class _CurrentRoomCard extends StatelessWidget {
+  const _CurrentRoomCard({
+    required this.user,
+    required this.firebase,
+    required this.text,
+  });
+  final AppUser? user;
+  final FirebaseService firebase;
+  final _UserText text;
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = user;
+    if (currentUser == null) return const SizedBox.shrink();
+    return StreamBuilder<List<AccessGrant>>(
+      stream: firebase.watchAccessGrants(userId: currentUser.id, limit: 80),
+      builder: (context, grantSnapshot) {
+        final grants = grantSnapshot.data ?? const <AccessGrant>[];
+        return StreamBuilder<List<Area>>(
+          stream: firebase.watchAreas(),
+          builder: (context, areaSnapshot) {
+            final areas = areaSnapshot.data ?? const <Area>[];
+            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: firebase.activeRoomSessionsRef
+                  .doc(currentUser.id)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                final data = snapshot.data?.data();
+                final record = data == null
+                    ? null
+                    : RoomAccessRecord.fromMap(snapshot.data!.id, data);
+                final activeGrant = _activeGrant(grants);
+                final accessRoom = record?.areaName ?? activeGrant?.areaName;
+                return _Panel(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        text.currentRoom,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      if (accessRoom == null)
+                        Text(
+                          text.noActiveRoom,
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontWeight: FontWeight.w800,
+                          ),
+                        )
+                      else ...[
+                        Row(
+                          children: [
+                            Icon(
+                              record == null
+                                  ? Icons.meeting_room_rounded
+                                  : Icons.check_circle_rounded,
+                              color: const Color(0xFF16A34A),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                accessRoom,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          record == null
+                              ? text.accessReady
+                              : '${text.checkedIn}: ${DateFormat.yMMMd().add_jm().format(record.timestamp)}',
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      _RoomCapacityList(
+                        rooms: _visibleRooms(currentUser, grants),
+                        areas: areas,
+                      ),
+                      if (record != null) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: () async {
+                              await firebase.closeActiveRoomSessionForUser(
+                                currentUser,
+                              );
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(text.signedOutRoom)),
+                              );
+                            },
+                            icon: const Icon(Icons.logout_rounded),
+                            label: Text(text.signOutRoom),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _HomeRoomActionButton extends StatelessWidget {
+  const _HomeRoomActionButton({
+    required this.user,
+    required this.firebase,
+    required this.text,
+  });
+
+  final AppUser? user;
+  final FirebaseService firebase;
+  final _UserText text;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: user == null ? null : () => _showRoomActionDialog(context),
+        icon: const Icon(Icons.logout_rounded),
+        label: Text(text.exitRoom),
+      ),
+    );
+  }
+
+  Future<void> _showRoomActionDialog(BuildContext context) async {
+    final currentUser = user;
+    if (currentUser == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text.roomActionTitle,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.exit_to_app_rounded),
+                  title: Text(
+                    text.exitRoom,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(text.exitRoomNote),
+                  onTap: () async {
+                    final auth = context.read<AuthProvider>();
+                    Navigator.pop(sheetContext);
+                    await firebase.closeActiveRoomSessionForUser(currentUser);
+                    final ok = await auth.logout();
+                    if (!context.mounted || !ok) return;
+                    Navigator.of(context).pushNamedAndRemoveUntil(
+                      WelcomeScreen.route,
+                      (_) => false,
+                    );
+                  },
+                ),
+                const Divider(height: 16),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.meeting_room_rounded),
+                  title: Text(
+                    text.enterNewRoom,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(text.enterNewRoomNote),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    showDialog<void>(
+                      context: context,
+                      builder: (_) => _NewRoomRequestDialog(
+                        user: currentUser,
+                        firebase: firebase,
+                        text: text,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _NewRoomRequestDialog extends StatefulWidget {
+  const _NewRoomRequestDialog({
+    required this.user,
+    required this.firebase,
+    required this.text,
+  });
+
+  final AppUser user;
+  final FirebaseService firebase;
+  final _UserText text;
+
+  @override
+  State<_NewRoomRequestDialog> createState() => _NewRoomRequestDialogState();
+}
+
+class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
+  Area? _selected;
+  bool _sending = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.text.enterNewRoom),
+      content: StreamBuilder<List<Area>>(
+        stream: widget.firebase.watchAreas(),
+        builder: (context, snapshot) {
+          final areas = (snapshot.data ?? const <Area>[])
+              .where((area) => area.active)
+              .toList();
+          if (areas.isEmpty) return Text(widget.text.noRoomsAvailable);
+          _selected ??= areas.first;
+          return DropdownButtonFormField<Area>(
+            initialValue: _selected,
+            decoration: InputDecoration(labelText: widget.text.currentRoom),
+            items: [
+              for (final area in areas)
+                DropdownMenuItem(value: area, child: Text(_areaDisplay(area))),
+            ],
+            onChanged: _sending
+                ? null
+                : (value) => setState(() => _selected = value),
+          );
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: _sending ? null : () => Navigator.pop(context),
+          child: Text(widget.text.close),
+        ),
+        FilledButton.icon(
+          onPressed: _sending || _selected == null ? null : _sendRequest,
+          icon: _sending
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.send_rounded),
+          label: Text(widget.text.send),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _sendRequest() async {
+    final area = _selected;
+    if (area == null) return;
+    setState(() => _sending = true);
+    try {
+      await widget.firebase.createRoomAccessRequest(
+        user: widget.user,
+        area: area,
+        areaName: _areaDisplay(area),
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.text.roomRequestSent)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+}
+
+class _InlineInfo extends StatelessWidget {
+  const _InlineInfo({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F9FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFBAE6FD)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Text(
+              '$label: ',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoomCapacityList extends StatelessWidget {
+  const _RoomCapacityList({required this.rooms, required this.areas});
+
+  final List<String> rooms;
+  final List<Area> areas;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rooms.isEmpty) return const SizedBox.shrink();
+    return Column(
+      children: [
+        for (final room in rooms.take(4))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _RoomCapacityRow(room: room, area: _matchingArea(room)),
+          ),
+      ],
+    );
+  }
+
+  Area? _matchingArea(String room) {
+    final key = _accessKey(room);
+    for (final area in areas) {
+      if (_accessKey(area.name) == key ||
+          _accessKey(area.roomNumber) == key ||
+          _accessKey('${area.floor} - Room ${area.roomNumber}') == key) {
+        return area;
+      }
+    }
+    return null;
+  }
+}
+
+class _RoomCapacityRow extends StatelessWidget {
+  const _RoomCapacityRow({required this.room, required this.area});
+
+  final String room;
+  final Area? area;
+
+  @override
+  Widget build(BuildContext context) {
+    final capacity = area?.capacity ?? 0;
+    final occupied = area?.currentOccupancy ?? 0;
+    final label = capacity <= 0
+        ? 'Capacity available'
+        : '$occupied / $capacity occupied';
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FDFF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE0F2FE)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            const Icon(Icons.meeting_room_rounded, color: Color(0xFF0D9488)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                room,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+AccessGrant? _activeGrant(List<AccessGrant> grants) {
+  final now = DateTime.now();
+  final active = grants.where((grant) => grant.isActiveAt(now)).toList()
+    ..sort((a, b) => a.endAt.compareTo(b.endAt));
+  return active.isEmpty ? null : active.first;
+}
+
+DateTime? _latestGrantExpiry(List<AccessGrant> grants) {
+  final active = grants.where((grant) => grant.active).toList()
+    ..sort((a, b) => b.endAt.compareTo(a.endAt));
+  return active.isEmpty ? null : active.first.endAt;
+}
+
+List<String> _visibleRooms(AppUser user, List<AccessGrant> grants) {
+  final values = <String>[
+    ...grants.map((grant) => grant.areaName),
+    ...user.assignedRooms,
+  ];
+  final rooms = <String>[];
+  for (final value in values) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) continue;
+    if (rooms.any((room) => _accessKey(room) == _accessKey(trimmed))) continue;
+    rooms.add(trimmed);
+  }
+  return rooms;
+}
+
+String _accessKey(String value) =>
+    value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
+class _HistoryTab extends StatelessWidget {
+  const _HistoryTab({
+    required this.user,
+    required this.firebase,
+    required this.text,
+  });
+  final AppUser? user;
+  final FirebaseService firebase;
+  final _UserText text;
+
+  @override
+  Widget build(BuildContext context) {
+    final currentUser = user;
+    if (currentUser == null) return const SizedBox.shrink();
+    return SafeArea(
+      bottom: false,
+      child: StreamBuilder<List<AccessLog>>(
+        stream: firebase.watchUserLogs(currentUser.id, limit: 80),
+        builder: (context, snapshot) {
+          final logs = snapshot.data ?? const <AccessLog>[];
+          return ListView(
+            padding: const EdgeInsets.all(18),
+            children: [
+              const Text(
+                'History',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 12),
+              _HistorySummary(logs: logs),
+              const SizedBox(height: 12),
+              if (logs.isEmpty)
+                const _Panel(child: Text('No access history yet.'))
+              else
+                for (final log in logs)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _Panel(
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          log.areaName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        subtitle: Text(
+                          DateFormat.yMMMd().add_jm().format(log.timestamp),
+                        ),
+                        trailing: Text(
+                          log.status.toUpperCase(),
+                          style: TextStyle(
+                            color: log.granted
+                                ? const Color(0xFF16A34A)
+                                : const Color(0xFFE11D48),
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ProfileTab extends StatelessWidget {
+  const _ProfileTab({
+    required this.user,
+    required this.firebase,
+    required this.text,
+  });
+  final AppUser? user;
+  final FirebaseService firebase;
+  final _UserText text;
+
+  @override
+  Widget build(BuildContext context) {
+    final pass = _AccessPass.fromUser(user);
+    return SafeArea(
+      bottom: false,
+      child: ListView(
+        padding: const EdgeInsets.all(18),
+        children: [
+          _ProfilePassCard(pass: pass),
+          if (user != null) ...[
+            const SizedBox(height: 14),
+            StreamBuilder<List<AccessGrant>>(
+              stream: firebase.watchAccessGrants(userId: user!.id, limit: 80),
+              builder: (context, snapshot) {
+                final validUntil = _latestGrantExpiry(
+                  snapshot.data ?? const <AccessGrant>[],
+                );
+                return _Panel(
+                  child: _InlineInfo(
+                    label: text.validUntil,
+                    value: validUntil == null
+                        ? text.noExpiryAvailable
+                        : DateFormat.yMMMd().add_jm().format(validUntil),
+                  ),
+                );
+              },
+            ),
+          ],
+          const SizedBox(height: 14),
+          _Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Room Access',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 10),
+                StreamBuilder<List<Area>>(
+                  stream: firebase.watchAreas(),
+                  builder: (context, snapshot) => _RoomPermissionGrid(
+                    rooms: pass.rooms,
+                    areas: snapshot.data ?? const <Area>[],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistorySummary extends StatelessWidget {
+  const _HistorySummary({required this.logs});
+
+  final List<AccessLog> logs;
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = <String, int>{};
+    for (final log in logs) {
+      counts.update(log.areaName, (value) => value + 1, ifAbsent: () => 1);
+    }
+    final entries = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Room Summary',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          if (entries.isEmpty)
+            const Text('No room visits recorded yet.')
+          else
+            for (final entry in entries.take(5))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        entry.key,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    Text(
+                      '${entry.value} times',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsTab extends StatelessWidget {
+  const _SettingsTab({
+    required this.user,
+    required this.firebase,
+    required this.text,
+    required this.language,
+    required this.nightMode,
+    required this.onLanguageChanged,
+    required this.onNightModeChanged,
+  });
+
+  final AppUser? user;
+  final FirebaseService firebase;
+  final _UserText text;
+  final String language;
+  final bool nightMode;
+  final ValueChanged<String> onLanguageChanged;
+  final ValueChanged<bool> onNightModeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      bottom: false,
+      child: ListView(
+        padding: const EdgeInsets.all(18),
+        children: [
+          const Text(
+            'Settings',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          _Panel(
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.edit_rounded),
+              title: Text(
+                text.editProfile,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              subtitle: Text(text.editProfileNote),
+              onTap: () =>
+                  Navigator.pushNamed(context, EditProfileScreen.route),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _Panel(
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.support_agent_rounded),
+              title: Text(
+                text.helpSupport,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              subtitle: Text(text.helpSupportNote),
+              onTap: user == null
+                  ? null
+                  : () => showDialog<void>(
+                      context: context,
+                      builder: (_) => _SupportRequestDialog(
+                        user: user!,
+                        firebase: firebase,
+                        text: text,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          _Panel(
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.lock_reset_rounded),
+              title: Text(
+                text.changePassword,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              subtitle: Text(text.forgotPasswordNote),
+              onTap: () async {
+                final auth = context.read<AuthProvider>();
+                final ok = await auth.sendPasswordReset();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      ok
+                          ? text.passwordEmailSent
+                          : auth.error ?? text.actionFailed,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
+          _Panel(
+            child: Column(
+              children: [
+                SwitchListTile(
+                  value: nightMode,
+                  onChanged: onNightModeChanged,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    text.nightMode,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                DropdownButtonFormField<String>(
+                  initialValue: language,
+                  decoration: InputDecoration(labelText: text.language),
+                  items: const [
+                    DropdownMenuItem(value: 'English', child: Text('English')),
+                    DropdownMenuItem(value: 'Malay', child: Text('Malay')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) onLanguageChanged(value);
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          _Panel(
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.logout_rounded),
+              title: const Text(
+                'Sign Out',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+              onTap: () async {
+                final ok = await context.read<AuthProvider>().logout();
+                if (!context.mounted || !ok) return;
+                Navigator.of(
+                  context,
+                ).pushNamedAndRemoveUntil(WelcomeScreen.route, (_) => false);
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SupportRequestDialog extends StatefulWidget {
+  const _SupportRequestDialog({
+    required this.user,
+    required this.firebase,
+    required this.text,
+  });
+
+  final AppUser user;
+  final FirebaseService firebase;
+  final _UserText text;
+
+  @override
+  State<_SupportRequestDialog> createState() => _SupportRequestDialogState();
+}
+
+class _SupportRequestDialogState extends State<_SupportRequestDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _subject = TextEditingController();
+  final _message = TextEditingController();
+  final _contact = TextEditingController();
+  bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _contact.text = widget.user.email;
+  }
+
+  @override
+  void dispose() {
+    _subject.dispose();
+    _message.dispose();
+    _contact.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.text.supportTitle),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _subject,
+                decoration: InputDecoration(
+                  labelText: widget.text.supportSubject,
+                ),
+                validator: _required,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _message,
+                minLines: 4,
+                maxLines: 6,
+                decoration: InputDecoration(
+                  labelText: widget.text.supportMessage,
+                ),
+                validator: _required,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _contact,
+                decoration: InputDecoration(
+                  labelText: widget.text.supportContact,
+                ),
+                validator: _required,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _sending ? null : () => Navigator.pop(context),
+          child: Text(widget.text.close),
+        ),
+        FilledButton.icon(
+          onPressed: _sending ? null : _send,
+          icon: _sending
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.send_rounded),
+          label: Text(widget.text.send),
+        ),
+      ],
+    );
+  }
+
+  String? _required(String? value) {
+    return value == null || value.trim().isEmpty ? 'Required' : null;
+  }
+
+  Future<void> _send() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _sending = true);
+    try {
+      await widget.firebase.createSupportRequest(
+        user: widget.user,
+        subject: _subject.text,
+        message: _message.text,
+        contact: _contact.text,
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.text.supportSent)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+}
+
+class _Panel extends StatelessWidget {
+  const _Panel({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: .92),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF99F6E4)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F766E).withValues(alpha: .10),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(padding: const EdgeInsets.all(16), child: child),
+    );
+  }
+}
+
+class _ProfilePassCard extends StatelessWidget {
+  const _ProfilePassCard({required this.pass});
+  final _AccessPass pass;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _ProfileAvatar(photoPath: pass.photoPath),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      pass.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      pass.category,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          _PassLine(label: 'ID', value: pass.identity),
+          const SizedBox(height: 8),
+          _PassLine(label: 'Access Status', value: pass.accessStatus),
+          const SizedBox(height: 8),
+          _PassLine(label: 'Semester', value: pass.semester),
+          const SizedBox(height: 8),
+          _PassLine(label: 'Session', value: pass.session),
+          const SizedBox(height: 8),
+          _PassLine(label: pass.academicLabel, value: pass.programme),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileAvatar extends StatelessWidget {
+  const _ProfileAvatar({required this.photoPath});
+  final String? photoPath;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = _photoProvider();
+    return CircleAvatar(
+      radius: 38,
+      backgroundColor: const Color(0xFFCCFBF1),
+      backgroundImage: provider,
+      child: provider == null
+          ? const Icon(
+              Icons.face_retouching_natural_rounded,
+              color: Color(0xFF0F766E),
+              size: 34,
+            )
+          : null,
+    );
+  }
+
+  ImageProvider<Object>? _photoProvider() {
+    final path = photoPath?.trim();
+    if (path == null || path.isEmpty) return null;
+    final file = File(path);
+    return file.existsSync() ? FileImage(file) : null;
+  }
+}
+
+class _PassLine extends StatelessWidget {
+  const _PassLine({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDFA),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 96,
+              child: Text(
+                '$label:',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RoomPermissionGrid extends StatelessWidget {
+  const _RoomPermissionGrid({required this.rooms, this.areas = const []});
+  final List<String> rooms;
+  final List<Area> areas;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rooms.isEmpty) return const Text('No room access assigned.');
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 520 ? 3 : 2;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: rooms.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 1.35,
+          ),
+          itemBuilder: (context, index) {
+            return DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .88),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF5EEAD4)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.meeting_room_rounded,
+                      color: Color(0xFF0F766E),
+                    ),
+                    const Spacer(),
+                    Text(
+                      rooms[index],
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _capacityLabel(_matchingArea(rooms[index])),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF64748B),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Area? _matchingArea(String room) {
+    final key = _accessKey(room);
+    for (final area in areas) {
+      if (_accessKey(area.name) == key ||
+          _accessKey(area.roomNumber) == key ||
+          _accessKey('${area.floor} - Room ${area.roomNumber}') == key) {
+        return area;
+      }
+    }
+    return null;
+  }
+}
+
+String _capacityLabel(Area? area) {
+  if (area == null || area.capacity <= 0) return 'Capacity available';
+  return '${area.currentOccupancy} / ${area.capacity} occupied';
+}
+
+class _UserBottomBar extends StatelessWidget {
+  const _UserBottomBar({
+    required this.selectedIndex,
+    required this.onChanged,
+    required this.text,
+  });
+  final int selectedIndex;
+  final ValueChanged<int> onChanged;
+  final _UserText text;
+
+  static const _items = [
+    (icon: Icons.home_rounded, label: 'Home'),
+    (icon: Icons.list_alt_rounded, label: 'History'),
+    (icon: Icons.person_rounded, label: 'Profile'),
+    (icon: Icons.settings_rounded, label: 'Settings'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: SizedBox(
+        height: 66,
+        width: double.infinity,
+        child: DecoratedBox(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Color(0xFFBAE6FD))),
+          ),
+          child: Row(
+            children: [
+              for (var i = 0; i < _items.length; i++)
+                Expanded(
+                  child: InkWell(
+                    onTap: () => onChanged(i),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          _items[i].icon,
+                          color: selectedIndex == i
+                              ? const Color(0xFF0D9488)
+                              : const Color(0xFF64748B),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          text.navLabel(i),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: selectedIndex == i
+                                ? const Color(0xFF0D9488)
+                                : const Color(0xFF64748B),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Container(
+                          width: 4,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: selectedIndex == i
+                                ? const Color(0xFF3B82F6)
+                                : Colors.transparent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AccessPass {
+  const _AccessPass({
+    required this.name,
+    required this.category,
+    required this.identity,
+    required this.accessStatus,
+    required this.semester,
+    required this.session,
+    required this.academicLabel,
+    required this.programme,
+    required this.rooms,
+    this.photoPath,
+  });
+
+  final String name;
+  final String category;
+  final String identity;
+  final String accessStatus;
+  final String semester;
+  final String session;
+  final String academicLabel;
+  final String programme;
+  final List<String> rooms;
+  final String? photoPath;
+
+  factory _AccessPass.fromUser(AppUser? user) {
+    final rooms = user?.assignedRooms
+        .where((room) => room.trim().isNotEmpty)
+        .toList();
+    final position = user?.position.trim().toLowerCase();
+    final isStaff = position == 'staff';
+    return _AccessPass(
+      name: user?.name.trim().isNotEmpty == true
+          ? user!.name.trim()
+          : 'Fazekey User',
+      category: isStaff ? 'Staff' : 'Student',
+      identity: user?.identityNumber.trim().isNotEmpty == true
+          ? user!.identityNumber.trim()
+          : 'Unavailable',
+      accessStatus: user?.isApproved == false ? 'Setup Required' : 'Active',
+      semester: user?.currentSemester.trim().isNotEmpty == true
+          ? user!.currentSemester.trim()
+          : 'Semester 1',
+      session: _currentAcademicSession(),
+      academicLabel: isStaff ? 'Department' : 'Programme',
+      programme: isStaff
+          ? (user?.department.trim().isNotEmpty == true
+                ? user!.department.trim()
+                : 'Department unavailable')
+          : _programmeName(user),
+      rooms: rooms == null || rooms.isEmpty ? const [] : rooms,
+      photoPath: user?.photoUrl,
+    );
+  }
+}
+
+class _CampusNews {
+  const _CampusNews({
+    required this.title,
+    required this.dateLabel,
+    this.link = '',
+    this.order = 0,
+  });
+
+  final String title;
+  final String dateLabel;
+  final String link;
+  final int order;
+
+  static _CampusNews fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final timestamp = data['date'] as Timestamp?;
+    final dateLabel = (data['dateLabel'] ?? data['publishedAtLabel'])
+        ?.toString()
+        .trim();
+    return _CampusNews(
+      title: (data['title'] ?? 'Campus Update').toString(),
+      dateLabel: dateLabel?.isNotEmpty == true
+          ? dateLabel!
+          : timestamp == null
+          ? ''
+          : DateFormat('MMM d, yyyy').format(timestamp.toDate()),
+      link: (data['link'] ?? data['url'] ?? '').toString(),
+      order: data['order'] is int ? data['order'] as int : 0,
+    );
+  }
+}
+
+const _campusNewsCount = 3;
+
+const _defaultCampusNews = [
+  _CampusNews(
+    order: 1,
+    title: 'Final exam desk numbers for Semester I 2025/2026 now available',
+    dateLabel: '18 May 2026',
+  ),
+  _CampusNews(
+    order: 2,
+    title:
+        'Update your phone number and personal email to receive important notices',
+    dateLabel: '30 April 2026',
+    link: 'http://itinfo.uthm.edu.my/phone-smap/',
+  ),
+  _CampusNews(
+    order: 3,
+    title:
+        'Course withdrawal applications open for Bachelor\'s and Diploma students for Semester II 2025/2026',
+    dateLabel: '10 May 2026',
+  ),
+];
+
+int _sortNews(_CampusNews a, _CampusNews b) {
+  if (a.order != b.order) return a.order.compareTo(b.order);
+  return a.title.compareTo(b.title);
+}
+
+List<_CampusNews> _campusNewsWithDefaults(List<_CampusNews> realtimeNews) {
+  final sorted = realtimeNews.where((item) => item.order > 0).toList()
+    ..sort(_sortNews);
+  return [
+    for (final fallback in _defaultCampusNews)
+      _matchingNews(sorted, fallback.order) ?? fallback,
+  ].take(_campusNewsCount).toList(growable: false);
+}
+
+_CampusNews? _matchingNews(List<_CampusNews> news, int order) {
+  for (final item in news) {
+    if (item.order == order) return item;
+  }
+  return null;
+}
+
+String _areaDisplay(Area area) {
+  final name = area.name.trim();
+  if (name.isNotEmpty) return name;
+  final room = area.roomNumber.trim();
+  final floor = area.floor.trim();
+  if (room.isEmpty) return floor.isEmpty ? area.id : floor;
+  return floor.isEmpty ? 'Room $room' : '$floor - Room $room';
+}
+
+String _programmeName(AppUser? user) {
+  final source = [
+    user?.course,
+    user?.department,
+    user?.faculty,
+  ].whereType<String>().join(' ').toLowerCase();
+  if (source.contains('multimedia') || source.contains('bim')) {
+    return 'Bachelor of Computer Science (Multimedia Computing) with Honours - BIM';
+  }
+  if (source.contains('software') || source.contains('bis')) {
+    return 'Bachelor of Computer Science (Software Engineering) with Honours - BIS';
+  }
+  if (source.contains('web') || source.contains('biw')) {
+    return 'Bachelor of Computer Science (Web Technology) with Honours - BIW';
+  }
+  if (source.contains('information technology') || source.contains('bit')) {
+    return 'Bachelor of Information Technology with Honours - BIT';
+  }
+  return 'Bachelor of Computer Science (Information Security) with Honours - BIS';
+}
+
+String _currentAcademicSession() {
+  final now = DateTime.now();
+  final start = now.month >= 9 ? now.year : now.year - 1;
+  return '$start/${start + 1}';
+}
+
+class _UserText {
+  const _UserText(this.locale);
+
+  final String locale;
+
+  bool get _ms => locale == 'Malay';
+
+  String get welcomeBack => _ms ? 'Selamat kembali' : 'Welcome back';
+  String get homeSubtitle => _ms ? 'Akses kampus aktif' : 'Campus access';
+  String get realTime =>
+      _ms ? 'Tarikh dan masa semasa' : 'Current date and time';
+  String get currentRoom => _ms ? 'Bilik Semasa' : 'Current Room';
+  String get noActiveRoom =>
+      _ms ? 'Tiada akses bilik aktif' : 'No active room access';
+  String get accessReady =>
+      _ms ? 'Akses bilik sedia digunakan' : 'Room access ready';
+  String get checkedIn => _ms ? 'Daftar masuk' : 'Checked in';
+  String get validUntil => _ms ? 'Sah sehingga' : 'Valid until';
+  String get noExpiryAvailable =>
+      _ms ? 'Tiada tarikh tamat aktif' : 'No active expiry date';
+  String get signOutRoom => _ms ? 'Daftar Keluar Bilik' : 'Sign Out of Room';
+  String get signedOutRoom =>
+      _ms ? 'Telah daftar keluar bilik.' : 'Signed out of room.';
+  String get signOut => _ms ? 'Log Keluar' : 'Sign Out';
+  String get exitRoom => _ms ? 'Keluar Bilik' : 'Exit Room';
+  String get roomActionTitle =>
+      _ms ? 'Pilih tindakan bilik' : 'Choose room action';
+  String get exitRoomNote => _ms
+      ? 'Tamatkan sesi bilik aktif dan log keluar daripada aplikasi.'
+      : 'End the active room session and sign out of the app.';
+  String get enterNewRoom => _ms ? 'Masuk Bilik Baharu' : 'Enter New Room';
+  String get enterNewRoomNote => _ms
+      ? 'Hantar permintaan bilik baharu untuk kelulusan admin.'
+      : 'Send a new room request for admin approval.';
+  String get roomRequestSent => _ms
+      ? 'Permintaan bilik dihantar. Sila tunggu kelulusan admin.'
+      : 'Room request sent. Please wait for admin approval.';
+  String get noRoomsAvailable =>
+      _ms ? 'Tiada bilik aktif tersedia.' : 'No active rooms available.';
+  String get editProfile => _ms ? 'Edit Profil' : 'Edit Profile';
+  String get editProfileNote => _ms
+      ? 'Perubahan memerlukan kelulusan admin dan hanya boleh dibuat sekali sebulan.'
+      : 'Changes require admin approval and are limited to once per month.';
+  String get changePassword => _ms ? 'Tukar Kata Laluan' : 'Change Password';
+  String get forgotPasswordNote => _ms
+      ? 'Hantar pautan tetapan semula kata laluan ke emel anda.'
+      : 'Send a password reset link to your email.';
+  String get passwordEmailSent => _ms
+      ? 'Berjaya. Emel tetapan semula kata laluan telah disediakan.'
+      : 'Success. Password reset email prepared.';
+  String get actionFailed =>
+      _ms ? 'Tindakan gagal.' : 'Unable to complete action.';
+  String get helpSupport => _ms ? 'Bantuan & Sokongan' : 'Help & Support';
+  String get helpSupportNote => _ms
+      ? 'Hantar isu kepada admin untuk tindakan lanjut.'
+      : 'Send an issue to admin for follow-up.';
+  String get supportTitle => _ms ? 'Minta Bantuan' : 'Request Support';
+  String get supportSubject => _ms ? 'Subjek' : 'Subject';
+  String get supportMessage => _ms ? 'Mesej' : 'Message';
+  String get supportContact => _ms ? 'Telefon / emel' : 'Phone or email';
+  String get supportSent => _ms
+      ? 'Berjaya. Permintaan sokongan dihantar.'
+      : 'Success. Support request sent.';
+  String get send => _ms ? 'Hantar' : 'Send';
+  String get close => _ms ? 'Tutup' : 'Close';
+  String get nightMode => _ms ? 'Mod Malam' : 'Night Mode';
+  String get language => _ms ? 'Bahasa' : 'Language';
+
+  String navLabel(int index) {
+    final english = ['Home', 'History', 'Profile', 'Settings'];
+    final malay = ['Utama', 'Sejarah', 'Profil', 'Tetapan'];
+    final source = _ms ? malay : english;
+    return source[index.clamp(0, source.length - 1)];
+  }
+}

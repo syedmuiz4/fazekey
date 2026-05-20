@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../constants/command_center_options.dart';
 import '../models/area.dart';
 import '../services/firebase_service.dart';
 
@@ -24,7 +25,7 @@ class AreaProvider extends ChangeNotifier {
     }
     _sub ??= _firebase.watchAreas().listen(
       (value) {
-        areas = value;
+        areas = _presentationAreas(value);
         notifyListeners();
       },
       onError: (e) {
@@ -91,5 +92,17 @@ class AreaProvider extends ChangeNotifier {
   void dispose() {
     _sub?.cancel();
     super.dispose();
+  }
+
+  List<Area> _presentationAreas(List<Area> firestoreAreas) {
+    final byId = {for (final area in firestoreAreas) area.id: area};
+    final commandRooms = commandCenterAreas.entries.map((entry) {
+      final area = byId[entry.key] ?? entry.value;
+      return area.copyWith(active: true);
+    }).toList();
+    final extras = firestoreAreas
+        .where((area) => !commandCenterAreas.containsKey(area.id))
+        .map((area) => area.copyWith(active: true));
+    return [...commandRooms, ...extras];
   }
 }

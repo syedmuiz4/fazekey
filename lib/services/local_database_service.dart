@@ -6,8 +6,13 @@ import 'package:sqflite/sqflite.dart';
 import '../models/access_log.dart';
 
 class LocalFaceMatch {
-  const LocalFaceMatch({required this.userId, required this.distance});
+  const LocalFaceMatch({
+    required this.userId,
+    required this.name,
+    required this.distance,
+  });
   final String userId;
+  final String name;
   final double distance;
 }
 
@@ -55,9 +60,44 @@ class LocalDatabaseService {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  Future<void> rekeyFace({
+    required String fromUserId,
+    required String toUserId,
+    String? name,
+  }) async {
+    final from = fromUserId.trim();
+    final to = toUserId.trim();
+    if (from.isEmpty || to.isEmpty || from == to) return;
+    final db = await database;
+    final rows = await db.query(
+      'faces',
+      where: 'userId = ?',
+      whereArgs: [from],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final row = rows.first;
+    await db.transaction((txn) async {
+      await txn.insert('faces', {
+        'userId': to,
+        'name': name?.trim().isNotEmpty == true ? name!.trim() : row['name'],
+        'embedding': row['embedding'],
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.delete('faces', where: 'userId = ?', whereArgs: [from]);
+    });
+  }
+
+  Future<void> deleteFace(String userId) async {
+    final id = userId.trim();
+    if (id.isEmpty) return;
+    final db = await database;
+    await db.delete('faces', where: 'userId = ?', whereArgs: [id]);
+  }
+
   Future<LocalFaceMatch?> findNearestFace(
     List<double> embedding, {
-    double threshold = 1.05,
+    double threshold = 1.2,
   }) async {
     final db = await database;
     final rows = await db.query('faces');
@@ -71,6 +111,7 @@ class LocalDatabaseService {
       if (best == null || distance < best.distance) {
         best = LocalFaceMatch(
           userId: row['userId'] as String,
+          name: (row['name'] ?? '').toString(),
           distance: distance,
         );
       }

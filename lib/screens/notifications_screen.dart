@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../models/room_access_request.dart';
 import '../models/security_alert.dart';
 import '../providers/alert_provider.dart';
+import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 
@@ -34,15 +37,208 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           title: const Text('Recent Alerts'),
           backgroundColor: Colors.transparent,
         ),
-        body: alerts.isEmpty
-            ? const _EmptyAlerts()
-            : ListView.separated(
-                padding: const EdgeInsets.all(18),
-                itemCount: alerts.length,
-                separatorBuilder: (_, index) => const SizedBox(height: 12),
-                itemBuilder: (context, index) =>
-                    _AlertCard(alert: alerts[index]),
+        body: StreamBuilder<List<RoomAccessRequest>>(
+          stream: context.read<FirebaseService>().watchRoomAccessRequests(),
+          builder: (context, snapshot) {
+            final firebase = context.read<FirebaseService>();
+            final requests = (snapshot.data ?? const <RoomAccessRequest>[])
+                .where((request) => request.isOpen)
+                .toList();
+            return StreamBuilder(
+              stream: firebase.firestore
+                  .collection('passwordResetRequests')
+                  .where('status', isEqualTo: 'open')
+                  .snapshots(),
+              builder: (context, resetSnapshot) {
+                final resetRequests = resetSnapshot.data?.docs ?? const [];
+                return StreamBuilder(
+                  stream: firebase.firestore
+                      .collection('supportRequests')
+                      .where('status', isEqualTo: 'open')
+                      .snapshots(),
+                  builder: (context, supportSnapshot) {
+                    final supportRequests =
+                        supportSnapshot.data?.docs ?? const [];
+                    if (alerts.isEmpty &&
+                        requests.isEmpty &&
+                        resetRequests.isEmpty &&
+                        supportRequests.isEmpty) {
+                      return const _EmptyAlerts();
+                    }
+                    return ListView(
+                      padding: const EdgeInsets.all(18),
+                      children: [
+                        for (final request in supportRequests) ...[
+                          _SupportRequestCard(doc: request),
+                          const SizedBox(height: 12),
+                        ],
+                        for (final request in resetRequests) ...[
+                          _PasswordResetRequestCard(doc: request),
+                          const SizedBox(height: 12),
+                        ],
+                        for (final request in requests) ...[
+                          _RoomRequestCard(request: request),
+                          const SizedBox(height: 12),
+                        ],
+                        for (final alert in alerts) ...[
+                          _AlertCard(alert: alert),
+                          const SizedBox(height: 12),
+                        ],
+                      ],
+                    );
+                  },
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _SupportRequestCard extends StatelessWidget {
+  const _SupportRequestCard({required this.doc});
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    final data = doc.data();
+    final userName = (data['userName'] ?? 'User').toString();
+    final email = (data['email'] ?? '').toString();
+    final contact = (data['contact'] ?? '').toString();
+    final subject = (data['subject'] ?? 'Support request').toString();
+    final message = (data['message'] ?? '').toString();
+    final timestamp =
+        (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Help & Support Request',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$userName\n'
+            '$email\n'
+            'Contact: $contact\n'
+            '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+          ),
+          const SizedBox(height: 8),
+          Text(subject, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text(message),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: () => firebase.firestore
+                .collection('supportRequests')
+                .doc(doc.id)
+                .set({
+                  'status': 'handled',
+                  'handledAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true)),
+            child: const Text('Mark Handled'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PasswordResetRequestCard extends StatelessWidget {
+  const _PasswordResetRequestCard({required this.doc});
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    final data = doc.data();
+    final userName = (data['userName'] ?? 'User').toString();
+    final email = (data['email'] ?? '').toString();
+    final timestamp =
+        (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Password Reset Request',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$userName requested a temporary password.\n'
+            '$email\n'
+            '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+          ),
+          const SizedBox(height: 12),
+          FilledButton(
+            onPressed: () => firebase.firestore
+                .collection('passwordResetRequests')
+                .doc(doc.id)
+                .set({
+                  'status': 'handled',
+                  'handledAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true)),
+            child: const Text('Mark Handled'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoomRequestCard extends StatelessWidget {
+  const _RoomRequestCard({required this.request});
+
+  final RoomAccessRequest request;
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Room Access Request',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${request.userName} wants to enter ${request.areaName}.\n'
+            '${DateFormat.yMMMd().add_jm().format(request.createdAt)}',
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => firebase.decideRoomAccessRequest(
+                    request: request,
+                    allowed: true,
+                  ),
+                  child: const Text('Allow'),
+                ),
               ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => firebase.decideRoomAccessRequest(
+                    request: request,
+                    allowed: false,
+                  ),
+                  child: const Text('Revoke'),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
