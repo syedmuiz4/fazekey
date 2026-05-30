@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
+import 'package:firebase_core/firebase_core.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/command_center_options.dart';
@@ -42,6 +43,103 @@ class FirebaseService {
 
   String? get currentUserEmail => auth.currentUser?.email;
 
+  CollectionReference<Map<String, dynamic>> get userNotificationsRef =>
+      firestore.collection('userNotifications');
+
+  CollectionReference<Map<String, dynamic>> get adminNotificationsRef =>
+      firestore.collection('adminNotifications');
+
+  Future<void> _notifyUser({
+    required String userId,
+    required String title,
+    required String message,
+    String type = 'request',
+  }) {
+    final target = userId.trim();
+    if (target.isEmpty) return Future.value();
+    return userNotificationsRef.add({
+      'userId': target,
+      'title': title.trim(),
+      'message': message.trim(),
+      'type': type.trim(),
+      'read': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> _notifyAdmins({
+    required String title,
+    required String message,
+    String type = 'request',
+    String relatedId = '',
+  }) {
+    final cleanTitle = title.trim();
+    final cleanMessage = message.trim();
+    if (cleanTitle.isEmpty && cleanMessage.isEmpty) return Future.value();
+    return adminNotificationsRef.add({
+      'title': cleanTitle,
+      'message': cleanMessage,
+      'type': type.trim(),
+      'relatedId': relatedId.trim(),
+      'read': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> watchUserNotifications(
+    String userId, {
+    int limit = 20,
+  }) {
+    return userNotificationsRef
+        .where('userId', isEqualTo: userId.trim())
+        .limit(limit)
+        .snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> watchUnreadAdminNotifications({
+    int limit = 99,
+  }) {
+    return adminNotificationsRef
+        .where('read', isEqualTo: false)
+        .limit(limit)
+        .snapshots();
+  }
+
+  Future<void> markAdminNotificationsRead() async {
+    final snap = await adminNotificationsRef
+        .where('read', isEqualTo: false)
+        .limit(400)
+        .get();
+    if (snap.docs.isEmpty) return;
+    final batch = firestore.batch();
+    for (final doc in snap.docs) {
+      batch.set(doc.reference, {
+        'read': true,
+        'readAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
+
+  Future<void> markUserNotificationsRead(String userId) async {
+    final target = userId.trim();
+    if (target.isEmpty) return;
+    final snap = await userNotificationsRef
+        .where('userId', isEqualTo: target)
+        .where('read', isEqualTo: false)
+        .limit(200)
+        .get();
+    if (snap.docs.isEmpty) return;
+    final batch = firestore.batch();
+    for (final doc in snap.docs) {
+      batch.set(doc.reference, {
+        'read': true,
+        'readAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
+
   Future<bool> validateAdminSession(String profileId) async {
     final account = auth.currentUser;
     if (account == null || account.uid != profileId) return false;
@@ -54,6 +152,136 @@ class FirebaseService {
       email: email.trim(),
       password: password,
     );
+  }
+
+  bool isTemporaryPasswordExpired(AppUser user, {DateTime? now}) {
+    if (!user.requiresPasswordChange) return false;
+    final expiresAt = user.temporaryPasswordExpiresAt;
+    if (expiresAt == null) return false;
+    return !(now ?? DateTime.now()).isBefore(expiresAt);
+  }
+
+  Future<void> updateCurrentAccountPassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final account = auth.currentUser;
+    final email = account?.email?.trim();
+    final cleanCurrentPassword = currentPassword.trim();
+    final cleanNewPassword = newPassword.trim();
+    if (account == null || email == null || email.isEmpty) {
+      throw Exception('No signed-in account is available.');
+    }
+    if (cleanCurrentPassword.isEmpty || cleanNewPassword.length < 6) {
+      throw Exception(
+        'Current password and a 6+ character new password are required.',
+      );
+    }
+    await _reauthenticateCurrentAccount(
+      email: email,
+      password: cleanCurrentPassword,
+    );
+    await _authCall(() => account.updatePassword(cleanNewPassword));
+  }
+
+  Future<void> completeTemporaryPasswordChange({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final account = auth.currentUser;
+    final email = account?.email?.trim();
+    final cleanCurrentPassword = currentPassword.trim();
+    final cleanNewPassword = newPassword.trim();
+    if (account == null || email == null || email.isEmpty) {
+      throw Exception('No signed-in account is available.');
+    }
+    if (cleanCurrentPassword.isEmpty) {
+      throw Exception('Current temporary password is required.');
+    }
+    _validateStrongTemporaryPassword(cleanNewPassword);
+    if (cleanCurrentPassword == cleanNewPassword) {
+      throw Exception(
+        'Choose a new password that is different from the temporary password.',
+      );
+    }
+    final profile = await getUser(account.uid);
+    if (profile != null && isTemporaryPasswordExpired(profile)) {
+      throw Exception(
+        'Temporary password expired. Ask admin to send the temporary password again.',
+      );
+    }
+    try {
+      await _reauthenticateCurrentAccount(
+        email: email,
+        password: cleanCurrentPassword,
+      );
+    } on FirebaseAuthException {
+      throw Exception(
+        'Temporary password is incorrect or expired. Ask admin to send the temporary password again.',
+      );
+    } catch (e) {
+      final message = e.toString().toLowerCase();
+      if (message.contains('credential') ||
+          message.contains('password') ||
+          message.contains('expired')) {
+        throw Exception(
+          'Temporary password is incorrect or expired. Ask admin to send the temporary password again.',
+        );
+      }
+      rethrow;
+    }
+    await _authCall(() => account.updatePassword(cleanNewPassword));
+    await userRef(account.uid).set({
+      'requiresPasswordChange': false,
+      'temporaryPasswordExpiresAt': FieldValue.delete(),
+      'temporaryPasswordChangedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<bool> updateCurrentAccountEmail({
+    required String currentPassword,
+    required String newEmail,
+  }) async {
+    final account = auth.currentUser;
+    final email = account?.email?.trim();
+    final cleanCurrentPassword = currentPassword.trim();
+    final cleanNewEmail = newEmail.trim();
+    if (account == null || email == null || email.isEmpty) {
+      throw Exception('No signed-in admin account is available.');
+    }
+    if (cleanCurrentPassword.isEmpty || cleanNewEmail.isEmpty) {
+      throw Exception('Current password and a new email are required.');
+    }
+    await _reauthenticateCurrentAccount(
+      email: email,
+      password: cleanCurrentPassword,
+    );
+    var updatedImmediately = false;
+    try {
+      // ignore: deprecated_member_use
+      await _authCall(() => account.updateEmail(cleanNewEmail));
+      await account.reload();
+      updatedImmediately =
+          auth.currentUser?.email?.trim().toLowerCase() ==
+          cleanNewEmail.toLowerCase();
+    } catch (_) {
+      await _authCall(() => account.verifyBeforeUpdateEmail(cleanNewEmail));
+    }
+    await systemSettingsRef.set({
+      'administratorEmail': cleanNewEmail,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await userRef(account.uid).set({
+      if (updatedImmediately) 'email': cleanNewEmail,
+      if (updatedImmediately) 'pendingEmail': FieldValue.delete(),
+      if (!updatedImmediately) 'pendingEmail': cleanNewEmail,
+      if (!updatedImmediately) 'emailUpdateVerificationSent': true,
+      if (!updatedImmediately)
+        'emailUpdateVerificationSentAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return updatedImmediately;
   }
 
   Future<AppUser> register({
@@ -97,7 +325,7 @@ class FirebaseService {
       course: department.trim(),
       faculty: 'FSKTM',
       currentSemester: 'Semester 1',
-      accessLevel: adminRole ? 3 : accessLevel.clamp(1, 3).toInt(),
+      accessLevel: adminRole ? 3 : accessLevel.clamp(0, 3).toInt(),
       status: adminRole ? 'approved' : 'pending',
       createdAt: DateTime.now(),
       hasFace: false,
@@ -115,6 +343,51 @@ class FirebaseService {
         throw Exception('Account recovery is not configured for this app.');
       }
       throw Exception(e.message ?? 'Authentication failed: ${e.code}');
+    }
+  }
+
+  Future<void> _reauthenticateCurrentAccount({
+    required String email,
+    required String password,
+  }) {
+    final account = auth.currentUser;
+    if (account == null) {
+      throw Exception('No signed-in account is available.');
+    }
+    final credential = EmailAuthProvider.credential(
+      email: email,
+      password: password,
+    );
+    return _authCall(() => account.reauthenticateWithCredential(credential));
+  }
+
+  Future<String> _createManagedAuthUser({
+    required String email,
+    required String password,
+  }) async {
+    final secondaryAppName =
+        'fazekey-managed-user-${DateTime.now().microsecondsSinceEpoch}';
+    FirebaseApp? secondaryApp;
+    try {
+      secondaryApp = await Firebase.initializeApp(
+        name: secondaryAppName,
+        options: Firebase.app().options,
+      );
+      final secondaryAuth = FirebaseAuth.instanceFor(app: secondaryApp);
+      final credential = await _authCall(
+        () => secondaryAuth.createUserWithEmailAndPassword(
+          email: email.trim(),
+          password: password,
+        ),
+      );
+      final uid = credential.user?.uid;
+      if (uid == null || uid.trim().isEmpty) {
+        throw Exception('Unable to create the user login account.');
+      }
+      await secondaryAuth.signOut();
+      return uid;
+    } finally {
+      await secondaryApp?.delete();
     }
   }
 
@@ -200,7 +473,7 @@ class FirebaseService {
       'course': user.course.trim(),
       'faculty': user.faculty.trim(),
       'currentSemester': user.currentSemester.trim(),
-      'accessLevel': user.accessLevel.clamp(1, 3),
+      'accessLevel': user.accessLevel.clamp(0, 3),
       'status': user.status.trim().isEmpty ? 'approved' : user.status.trim(),
       'homeAddress': user.homeAddress.trim(),
       'emergencyContact': user.emergencyContact.trim(),
@@ -223,6 +496,7 @@ class FirebaseService {
     required String name,
     required String identityNumber,
     required String email,
+    required String temporaryPassword,
     required String department,
     required String phone,
     required String room,
@@ -241,11 +515,35 @@ class FirebaseService {
     final assignedRooms = adminRole
         ? const <String>[]
         : _normalizedRooms([...rooms, room]);
-    final ref = firestore.collection('users').doc();
+    final cleanEmail = email.trim();
+    final cleanTemporaryPassword = temporaryPassword.trim();
+    if (cleanEmail.isEmpty) {
+      throw Exception('A registered email address is required.');
+    }
+    if (cleanTemporaryPassword.isEmpty) {
+      throw Exception('A temporary password is required.');
+    }
+    late final String authUid;
+    try {
+      authUid = await _createManagedAuthUser(
+        email: cleanEmail,
+        password: cleanTemporaryPassword,
+      );
+    } catch (e) {
+      final message = e.toString().toLowerCase();
+      if (message.contains('email') && message.contains('already')) {
+        throw Exception(
+          'This email still exists in Firebase Authentication: $cleanEmail. '
+          'Delete that Authentication user in Firebase Console, then register again.',
+        );
+      }
+      rethrow;
+    }
+    final ref = userRef(authUid);
     final user = AppUser(
       id: ref.id,
       name: name.trim(),
-      email: email.trim(),
+      email: cleanEmail,
       department: department.trim(),
       phone: phone.trim(),
       room: _primaryRoom(assignedRooms),
@@ -256,12 +554,22 @@ class FirebaseService {
       course: course.trim().isEmpty ? department.trim() : course.trim(),
       faculty: faculty.trim().isEmpty ? 'FSKTM' : faculty.trim(),
       currentSemester: 'Semester 1',
-      accessLevel: adminRole ? 3 : accessLevel.clamp(1, 3).toInt(),
+      accessLevel: adminRole ? 3 : accessLevel.clamp(0, 3).toInt(),
       status: adminRole ? 'approved' : 'pending',
       createdAt: DateTime.now(),
       hasFace: false,
     );
-    await ref.set(user.toMap());
+    final issuedAt = DateTime.now();
+    await ref.set({
+      ...user.toMap(),
+      'authUid': authUid,
+      'temporaryPasswordIssuedAt': Timestamp.fromDate(issuedAt),
+      'temporaryPasswordExpiresAt': Timestamp.fromDate(
+        issuedAt.add(const Duration(hours: 1)),
+      ),
+      'temporaryPasswordEmailSent': false,
+      'requiresPasswordChange': true,
+    });
     return user;
   }
 
@@ -357,18 +665,29 @@ class FirebaseService {
       active: true,
       createdAt: DateTime.now(),
     );
-    await accessGrantsRef.add(grant.toMap());
-    final assignedRooms = _normalizedRooms([
-      ...user.assignedRooms,
-      grant.areaName,
-    ]);
-    await userRef(user.id).set({
-      'room': _primaryRoom(assignedRooms),
-      'rooms': assignedRooms,
-      'permittedZones': assignedRooms,
-      if (approveUser) 'status': 'approved',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final batch = firestore.batch();
+    await _deactivateActiveRoomGrantsForUserInBatch(
+      batch,
+      user.id,
+      exceptAreaId: area.id,
+      removeAreaAccess: true,
+    );
+    batch.set(accessGrantsRef.doc(), grant.toMap());
+    _setUserSingleRoomAccessInBatch(
+      batch,
+      userId: user.id,
+      area: area,
+      areaName: grant.areaName,
+      extraUserFields: {if (approveUser) 'status': 'approved'},
+    );
+    if (area.id.trim().isNotEmpty) {
+      batch.set(firestore.collection('areas').doc(area.id), {
+        'allowedUserIds': FieldValue.arrayUnion([user.id]),
+        'revokedUserIds': FieldValue.arrayRemove([user.id]),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
   }
 
   Future<void> revokeUserRoomAssignment({
@@ -465,7 +784,7 @@ class FirebaseService {
       'room': _primaryRoom(assignedRooms),
       'rooms': assignedRooms,
       'permittedZones': assignedRooms,
-      'accessLevel': accessLevel.clamp(1, 3),
+      'accessLevel': accessLevel.clamp(0, 3),
       'status': 'approved',
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -521,6 +840,111 @@ class FirebaseService {
       'photoChangeRequestedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    final existing = await firestore
+        .collection('profilePhotoRequests')
+        .where('userId', isEqualTo: userId.trim())
+        .where('status', isEqualTo: 'open')
+        .limit(1)
+        .get();
+    final payload = {
+      'userId': profile.id,
+      'userName': profile.name.trim().isEmpty ? profile.id : profile.name,
+      'email': profile.email,
+      'photoUrl': photoUrl.trim(),
+      'status': 'open',
+      'createdAt': FieldValue.serverTimestamp(),
+    };
+    if (existing.docs.isEmpty) {
+      final ref = await firestore
+          .collection('profilePhotoRequests')
+          .add(payload);
+      await _notifyAdmins(
+        title: 'Profile picture request',
+        message: '${payload['userName']} requested a new profile picture.',
+        type: 'profilePhoto',
+        relatedId: ref.id,
+      );
+    } else {
+      await existing.docs.first.reference.set(payload, SetOptions(merge: true));
+      await _notifyAdmins(
+        title: 'Profile picture request updated',
+        message: '${payload['userName']} updated a profile picture request.',
+        type: 'profilePhoto',
+        relatedId: existing.docs.first.id,
+      );
+    }
+  }
+
+  Future<void> requestProfileUpdate({
+    required AppUser current,
+    required AppUser requested,
+  }) async {
+    final ref = await firestore.collection('profileChangeRequests').add({
+      'userId': current.id,
+      'userName': current.name.trim().isEmpty ? current.id : current.name,
+      'email': current.email,
+      'status': 'open',
+      'createdAt': FieldValue.serverTimestamp(),
+      'current': {
+        'name': current.name,
+        'department': current.department,
+        'course': current.course,
+        'phone': current.phone,
+        'homeAddress': current.homeAddress,
+        'emergencyContact': current.emergencyContact,
+      },
+      'requested': {
+        'name': requested.name.trim(),
+        'department': requested.department.trim(),
+        'course': requested.course.trim(),
+        'phone': requested.phone.trim(),
+        'homeAddress': requested.homeAddress.trim(),
+        'emergencyContact': requested.emergencyContact.trim(),
+      },
+    });
+    await _notifyAdmins(
+      title: 'Profile change request',
+      message:
+          '${current.name.trim().isEmpty ? current.id : current.name} requested profile changes.',
+      type: 'profile',
+      relatedId: ref.id,
+    );
+  }
+
+  Future<void> decideProfileChangeRequest({
+    required String requestId,
+    required String userId,
+    required bool approved,
+    required Map<String, dynamic> requested,
+  }) async {
+    final id = requestId.trim();
+    final target = userId.trim();
+    if (id.isEmpty || target.isEmpty) return;
+    if (approved) {
+      await userRef(target).set({
+        'name': (requested['name'] ?? '').toString().trim(),
+        'department': (requested['department'] ?? '').toString().trim(),
+        'course': (requested['course'] ?? '').toString().trim(),
+        'phone': (requested['phone'] ?? '').toString().trim(),
+        'homeAddress': (requested['homeAddress'] ?? '').toString().trim(),
+        'emergencyContact': (requested['emergencyContact'] ?? '')
+            .toString()
+            .trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await firestore.collection('profileChangeRequests').doc(id).set({
+      'status': approved ? 'approved' : 'denied',
+      'decidedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _notifyUser(
+      userId: target,
+      title: 'Profile change ${approved ? 'approved' : 'denied'}',
+      message: approved
+          ? 'Your profile change request has been approved by admin.'
+          : 'Your profile change request was not approved by admin.',
+      type: 'profile',
+    );
   }
 
   Future<void> approveProfilePhotoUpdate(String userId) async {
@@ -535,12 +959,44 @@ class FirebaseService {
       'photoUpdatedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    await _notifyUser(
+      userId: userId,
+      title: 'Profile photo approved',
+      message: 'Your profile photo change has been approved by admin.',
+      type: 'profile',
+    );
   }
 
-  Future<void> rejectProfilePhotoUpdate(String userId) {
-    return userRef(userId).set({
+  Future<void> rejectProfilePhotoUpdate(String userId) async {
+    await userRef(userId).set({
       'pendingPhotoUrl': FieldValue.delete(),
+      'photoChangeRequestedAt': FieldValue.delete(),
       'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _notifyUser(
+      userId: userId,
+      title: 'Profile photo denied',
+      message: 'Your profile photo change was not approved by admin.',
+      type: 'profile',
+    );
+  }
+
+  Future<void> decideProfilePhotoRequest({
+    required String requestId,
+    required String userId,
+    required bool approved,
+  }) async {
+    final id = requestId.trim();
+    final target = userId.trim();
+    if (id.isEmpty || target.isEmpty) return;
+    if (approved) {
+      await approveProfilePhotoUpdate(target);
+    } else {
+      await rejectProfilePhotoUpdate(target);
+    }
+    await firestore.collection('profilePhotoRequests').doc(id).set({
+      'status': approved ? 'approved' : 'denied',
+      'decidedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
 
@@ -554,7 +1010,7 @@ class FirebaseService {
       'faceEmbedding': embedding,
       'biometricUid': userId,
       'status': 'approved',
-      'photoUrl': ?photoUrl,
+      if (photoUrl?.trim().isNotEmpty == true) 'photoUrl': photoUrl!.trim(),
       'faceUpdatedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -711,7 +1167,13 @@ class FirebaseService {
       status: 'open',
       createdAt: DateTime.now(),
     );
-    await roomAccessRequestsRef.add(request.toMap());
+    final ref = await roomAccessRequestsRef.add(request.toMap());
+    await _notifyAdmins(
+      title: 'Room access request',
+      message: '${request.userName} requested access to ${request.areaName}.',
+      type: 'room',
+      relatedId: ref.id,
+    );
   }
 
   Future<void> decideRoomAccessRequest({
@@ -736,11 +1198,26 @@ class FirebaseService {
         startAt: now,
         endAt: now.add(duration),
       );
+      await _activateApprovedRoomRequest(
+        user: user,
+        area: area,
+        areaName: request.areaName.trim().isEmpty
+            ? _areaRoomLabel(area)
+            : request.areaName,
+      );
     }
     await roomAccessRequestsRef.doc(request.id).set({
       'status': allowed ? 'allowed' : 'denied',
       'decidedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    await _notifyUser(
+      userId: request.userId,
+      title: 'Room request ${allowed ? 'approved' : 'denied'}',
+      message: allowed
+          ? 'Your request to enter ${request.areaName} has been approved by admin.'
+          : 'Your request to enter ${request.areaName} was not approved by admin.',
+      type: 'room',
+    );
   }
 
   Future<void> cancelRoomAccessRequest(String requestId) {
@@ -810,13 +1287,97 @@ class FirebaseService {
     final batch = firestore.batch();
     batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
     batch.set(activeRoomSessionsRef.doc(user.id), record.toMap());
+    await _deactivateActiveRoomGrantsForUserInBatch(
+      batch,
+      user.id,
+      exceptAreaId: area.id,
+      removeAreaAccess: true,
+    );
+    _setUserSingleRoomAccessInBatch(
+      batch,
+      userId: user.id,
+      area: area,
+      areaName: areaName,
+    );
     if (area.id.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(area.id), {
+        'allowedUserIds': FieldValue.arrayUnion([user.id]),
+        'revokedUserIds': FieldValue.arrayRemove([user.id]),
         'currentOccupancy': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
     await batch.commit();
     return const RoomSessionChange(allowed: true);
+  }
+
+  Future<void> _activateApprovedRoomRequest({
+    required AppUser user,
+    required Area area,
+    required String areaName,
+  }) async {
+    final active = await getActiveRoomSession(user.id);
+    if (active != null && active.areaId == area.id) return;
+    final now = DateTime.now();
+    final sessionId = '${user.id}_${now.microsecondsSinceEpoch}';
+    final entry = RoomAccessRecord(
+      id: sessionId,
+      sessionId: sessionId,
+      userId: user.id,
+      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+      areaId: area.id,
+      areaName: areaName,
+      event: 'entry',
+      timestamp: now,
+      reason: 'Admin-approved room request',
+    );
+    final batch = firestore.batch();
+    if (active != null) {
+      final exit = RoomAccessRecord(
+        id: '${active.sessionId}_switch_${now.microsecondsSinceEpoch}',
+        sessionId: active.sessionId,
+        userId: active.userId,
+        userName: active.userName,
+        areaId: active.areaId,
+        areaName: active.areaName,
+        event: 'exit',
+        timestamp: now,
+        reason: 'Switched by approved room request',
+      );
+      batch.set(roomAccessRecordsRef.doc(exit.id), exit.toMap());
+      if (active.areaId.trim().isNotEmpty) {
+        batch.set(
+          firestore.collection('areas').doc(active.areaId),
+          {
+            'allowedUserIds': FieldValue.arrayRemove([user.id]),
+            'currentOccupancy': FieldValue.increment(-1),
+          },
+          SetOptions(merge: true),
+        );
+      }
+    }
+    batch.set(roomAccessRecordsRef.doc(entry.id), entry.toMap());
+    batch.set(activeRoomSessionsRef.doc(user.id), entry.toMap());
+    await _deactivateActiveRoomGrantsForUserInBatch(
+      batch,
+      user.id,
+      exceptAreaId: area.id,
+    );
+    _setUserSingleRoomAccessInBatch(
+      batch,
+      userId: user.id,
+      area: area,
+      areaName: areaName,
+    );
+    if (area.id.trim().isNotEmpty) {
+      batch.set(firestore.collection('areas').doc(area.id), {
+        'allowedUserIds': FieldValue.arrayUnion([user.id]),
+        'revokedUserIds': FieldValue.arrayRemove([user.id]),
+        'currentOccupancy': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
   }
 
   Future<RoomSessionChange> recordRoomExit({
@@ -855,9 +1416,13 @@ class FirebaseService {
     final batch = firestore.batch();
     batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
     batch.delete(activeRoomSessionsRef.doc(user.id));
+    await _deactivateActiveRoomGrantsForUserInBatch(batch, user.id);
+    _clearUserRoomAccessInBatch(batch, userId: user.id);
     if (area.id.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(area.id), {
+        'allowedUserIds': FieldValue.arrayRemove([user.id]),
         'currentOccupancy': FieldValue.increment(-1),
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
     await batch.commit();
@@ -882,9 +1447,13 @@ class FirebaseService {
     final batch = firestore.batch();
     batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
     batch.delete(activeRoomSessionsRef.doc(user.id));
+    await _deactivateActiveRoomGrantsForUserInBatch(batch, user.id);
+    _clearUserRoomAccessInBatch(batch, userId: user.id);
     if (active.areaId.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(active.areaId), {
+        'allowedUserIds': FieldValue.arrayRemove([user.id]),
         'currentOccupancy': FieldValue.increment(-1),
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
     await batch.commit();
@@ -901,32 +1470,77 @@ class FirebaseService {
     final displayName = user?.name.trim().isNotEmpty == true
         ? user!.name.trim()
         : '[User Name]';
-    const resetUrl = 'https://fazekey.com/reset-password?token=xyz123';
-    await firestore.collection('passwordResetRequests').add({
+    await _authCall(() => auth.sendPasswordResetEmail(email: target));
+    final ref = await firestore.collection('passwordResetRequests').add({
       'userId': user?.id ?? '',
       'userName': displayName,
       'email': target,
       'status': 'open',
+      'emailSent': true,
       'createdAt': FieldValue.serverTimestamp(),
     });
-    final body =
-        '🔐 FAZEKEY PASSWORD RESET\r\n\r\n'
-        'Hi $displayName,\r\n\r\n'
-        'We received a request to reset your Fazekey password.\r\n\r\n'
-        '                 🔒 RESET PASSWORD\r\n\r\n'
-        'Or copy this link:\r\n'
-        '$resetUrl\r\n\r\n'
-        'This link will expire in 1 hour.\r\n\r\n'
-        'If you didn\'t request this, please ignore this email.\r\n\r\n'
-        '----------------------------------------\r\n'
-        'Thanks,\r\n'
-        '**Fazekey Security Team**\r\n\r\n'
-        '⚠️ Never share this email with anyone.';
-    await _launchMailto(
-      target,
-      subject: 'FAZEKEY Password Reset',
-      body: body,
-      requireOpened: false,
+    await _notifyUser(
+      userId: user?.id ?? '',
+      title: 'Password reset email sent',
+      message: 'Please check your email for the Fazekey password reset link.',
+      type: 'password',
+    );
+    await _notifyAdmins(
+      title: 'Password reset request',
+      message: '$displayName requested password help for $target.',
+      type: 'password',
+      relatedId: ref.id,
+    );
+  }
+
+  Future<void> sendTemporaryPasswordSetupEmail(AppUser user) async {
+    final target = user.email.trim();
+    if (target.isEmpty) {
+      throw Exception('A registered email address is required.');
+    }
+    await _authCall(() => auth.sendPasswordResetEmail(email: target));
+    try {
+      await userRef(user.id).set({
+        'requiresPasswordChange': false,
+        'temporaryPasswordExpiresAt': FieldValue.delete(),
+        'temporaryPasswordSetupEmailSent': true,
+        'temporaryPasswordSetupEmailSentAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // The Firebase email was already sent; profile metadata is best-effort.
+    }
+    try {
+      await _notifyUser(
+        userId: user.id,
+        title: 'Temporary password email sent',
+        message:
+            'Please check your email and follow the secure password setup link.',
+        type: 'password',
+      );
+    } catch (_) {
+      // Notification writes should not make the direct email action fail.
+    }
+  }
+
+  Future<void> decidePasswordResetRequest({
+    required String requestId,
+    required String userId,
+    required bool approved,
+  }) async {
+    final id = requestId.trim();
+    if (id.isEmpty) return;
+    await firestore.collection('passwordResetRequests').doc(id).set({
+      'status': approved ? 'approved' : 'denied',
+      'decidedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _notifyUser(
+      userId: userId,
+      title: 'Password request ${approved ? 'approved' : 'denied'}',
+      message: approved
+          ? 'Your password reset request has been approved by admin. Please check your email.'
+          : 'Your password reset request was not approved by admin.',
+      type: 'password',
     );
   }
 
@@ -944,9 +1558,9 @@ class FirebaseService {
     }
     final settings = await getSystemSettings();
     final adminEmail = settings.administratorEmail.trim().isEmpty
-        ? 'administrator@campus-access.local'
+        ? 'syedmuizzuddin03@gmail.com'
         : settings.administratorEmail.trim();
-    await firestore.collection('supportRequests').add({
+    final ref = await firestore.collection('supportRequests').add({
       'userId': user.id,
       'userName': user.name,
       'email': user.email,
@@ -956,6 +1570,13 @@ class FirebaseService {
       'status': 'open',
       'createdAt': FieldValue.serverTimestamp(),
     });
+    await _notifyAdmins(
+      title: 'Support request',
+      message:
+          '${user.name.trim().isEmpty ? user.id : user.name} requested help: $cleanSubject.',
+      type: 'support',
+      relatedId: ref.id,
+    );
     final body =
         'FAZEKEY HELP & SUPPORT\r\n\r\n'
         'User: ${user.name}\r\n'
@@ -974,11 +1595,15 @@ class FirebaseService {
   Future<void> sendSetupEmail(
     String email, {
     AppUser? user,
-    String temporaryPassword = 'fx_9A3k7W',
+    required String temporaryPassword,
   }) async {
     final target = email.trim();
     if (target.isEmpty) {
       throw Exception('A registered email address is required.');
+    }
+    final cleanTemporaryPassword = temporaryPassword.trim();
+    if (cleanTemporaryPassword.isEmpty) {
+      throw Exception('A temporary password is required.');
     }
     final profile = user ?? await getUserByEmail(target);
     final displayName = (profile?.name.trim().isNotEmpty == true)
@@ -991,7 +1616,7 @@ class FirebaseService {
         : 'Authorized zones: ${rooms.join(', ')}';
     final credentialLines = [
       'Registered email: $target',
-      'Temporary password: $temporaryPassword',
+      'Temporary password: $cleanTemporaryPassword',
       if (profile?.identityNumber.trim().isNotEmpty == true)
         'User ID: ${profile!.identityNumber.trim()}',
       'Role: $roleLabel',
@@ -999,10 +1624,10 @@ class FirebaseService {
     ].join('\r\n');
     final body =
         'Your Fazekey access is live, $displayName. Use the temporary password below to unlock your first door.\r\n\r\n'
-        'âš ï¸ This password expires in 24 hours.\r\n\r\n'
+        'Important: change this password after your first sign-in.\r\n\r\n'
         '$credentialLines\r\n\r\n'
         'Next steps:\r\n'
-        '1. Open FAZEKEY and sign in with the registered email.\r\n'
+        '1. Open FAZEKEY and sign in with the registered email and temporary password.\r\n'
         '2. Complete Face Registration when prompted by the administrator.\r\n'
         '3. Access is limited to the authorized zones listed above.\r\n\r\n'
         'If you did not expect this account, contact your FAZEKEY administrator before signing in.\r\n\r\n'
@@ -1014,6 +1639,18 @@ class FirebaseService {
       body: body,
     );
     if (!opened) throw Exception('Unable to open a local email application.');
+    if (profile != null) {
+      final issuedAt = DateTime.now();
+      await userRef(profile.id).set({
+        'requiresPasswordChange': true,
+        'temporaryPasswordIssuedAt': Timestamp.fromDate(issuedAt),
+        'temporaryPasswordExpiresAt': Timestamp.fromDate(
+          issuedAt.add(const Duration(hours: 1)),
+        ),
+        'temporaryPasswordEmailSent': true,
+        'temporaryPasswordEmailSentAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
   }
 
   Future<bool> _launchMailto(
@@ -1047,14 +1684,7 @@ class FirebaseService {
       firestore.collection('areas').doc(id).delete();
 
   Future<void> ensureSampleAreas() async {
-    final allowedIds = commandCenterAreas.keys.toSet();
-    final snap = await firestore.collection('areas').get();
     final batch = firestore.batch();
-    for (final doc in snap.docs) {
-      if (!allowedIds.contains(doc.id)) {
-        batch.delete(doc.reference);
-      }
-    }
     for (final entry in commandCenterAreas.entries) {
       batch.set(
         firestore.collection('areas').doc(entry.key),
@@ -1114,6 +1744,70 @@ class FirebaseService {
     await firestore.collection('areas').doc(areaId).set({
       'currentOccupancy': FieldValue.increment(delta),
     }, SetOptions(merge: true));
+  }
+
+  void _setUserSingleRoomAccessInBatch(
+    WriteBatch batch, {
+    required String userId,
+    required Area area,
+    required String areaName,
+    Map<String, Object?> extraUserFields = const {},
+  }) {
+    final roomLabel = _normalizedRooms([
+      areaName.trim().isEmpty ? _areaRoomLabel(area) : areaName,
+    ]);
+    batch.set(userRef(userId), {
+      'room': _primaryRoom(roomLabel),
+      'rooms': roomLabel,
+      'permittedZones': roomLabel,
+      ...extraUserFields,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  void _clearUserRoomAccessInBatch(WriteBatch batch, {required String userId}) {
+    batch.set(userRef(userId), {
+      'room': '',
+      'rooms': const <String>[],
+      'permittedZones': const <String>[],
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> _deactivateActiveRoomGrantsForUserInBatch(
+    WriteBatch batch,
+    String userId, {
+    String? exceptAreaId,
+    bool removeAreaAccess = false,
+  }) async {
+    final cleanUserId = userId.trim();
+    if (cleanUserId.isEmpty) return;
+    final snap = await accessGrantsRef
+        .where('userId', isEqualTo: cleanUserId)
+        .where('active', isEqualTo: true)
+        .get();
+    final keepAreaId = exceptAreaId?.trim();
+    final cleanedAreaIds = <String>{};
+    for (final doc in snap.docs) {
+      final grantAreaId = (doc.data()['areaId'] as String? ?? '').trim();
+      if (keepAreaId != null &&
+          keepAreaId.isNotEmpty &&
+          grantAreaId == keepAreaId) {
+        continue;
+      }
+      batch.set(doc.reference, {
+        'active': false,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (removeAreaAccess &&
+          grantAreaId.isNotEmpty &&
+          cleanedAreaIds.add(grantAreaId)) {
+        batch.set(firestore.collection('areas').doc(grantAreaId), {
+          'allowedUserIds': FieldValue.arrayRemove([cleanUserId]),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    }
   }
 
   Stream<List<AccessLog>> watchLogs({String? query, int limit = 30}) async* {
@@ -1232,7 +1926,14 @@ class FirebaseService {
       'status': 'open',
       'createdAt': FieldValue.serverTimestamp(),
     };
-    await firestore.collection('incidentReports').add(report);
+    final ref = await firestore.collection('incidentReports').add(report);
+    await _notifyAdmins(
+      title: 'Incident report',
+      message:
+          '${reporterName.trim().isEmpty ? reporterId : reporterName.trim()} submitted an incident report.',
+      type: 'incident',
+      relatedId: ref.id,
+    );
   }
 
   Stream<List<IncidentReport>> watchIncidentReports({int limit = 40}) {
@@ -1352,17 +2053,27 @@ class FirebaseService {
     return 'Student';
   }
 
+  static void _validateStrongTemporaryPassword(String password) {
+    if (password.length < 12) {
+      throw Exception('New password must be at least 12 characters long.');
+    }
+    if (!RegExp(r'[A-Z]').hasMatch(password) ||
+        !RegExp(r'[a-z]').hasMatch(password) ||
+        !RegExp(r'\d').hasMatch(password) ||
+        !RegExp(r'[^A-Za-z0-9]').hasMatch(password)) {
+      throw Exception(
+        'New password must include uppercase and lowercase letters, numbers, and symbols.',
+      );
+    }
+  }
+
   static String _accessKey(String value) =>
       value.trim().toLowerCase().replaceAll(' ', '');
 
   static String _areaRoomLabel(Area area) {
     final name = area.name.trim();
-    if (name.isNotEmpty) return name;
-    final floor = area.floor.trim();
     final roomNumber = area.roomNumber.trim();
-    if (floor.isNotEmpty && roomNumber.isNotEmpty) {
-      return '$floor - Room $roomNumber';
-    }
+    if (name.isNotEmpty) return name;
     if (roomNumber.isNotEmpty) return 'Room $roomNumber';
     return area.location.trim();
   }
@@ -1378,8 +2089,17 @@ class FirebaseService {
         ? '$location - $floorRoom'
         : '';
     return {
+      area.id,
       area.name,
       area.roomNumber,
+      if (floor.isNotEmpty && area.name.trim().isNotEmpty)
+        '$floor - ${area.name}',
+      if (location.isNotEmpty && area.name.trim().isNotEmpty)
+        '$location - ${area.name}',
+      if (location.isNotEmpty &&
+          floor.isNotEmpty &&
+          area.name.trim().isNotEmpty)
+        '$location - $floor - ${area.name}',
       if (roomNumber.isNotEmpty) 'Room $roomNumber',
       floorRoom,
       locationFloorRoom,

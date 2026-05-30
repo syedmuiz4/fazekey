@@ -101,7 +101,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     return AppBackground(
       child: Scaffold(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Edit Profile'),
           backgroundColor: Colors.transparent,
@@ -137,9 +137,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               homeAddress: _homeAddress,
               emergencyContact: _emergencyContact,
               photoPath: _photoPath,
-              onPickPhoto: photoBlockReason == null
-                  ? _showImageSourceSheet
-                  : null,
+              onPickPhoto: () {
+                if (photoBlockReason != null) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text(photoBlockReason)));
+                  return;
+                }
+                _showImageSourceSheet();
+              },
               onUpdateProfile: _updateProfile,
               updatingProfile: _updatingProfile,
               pickingPhoto: _pickingPhoto,
@@ -270,8 +276,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     var ok = false;
     Object? failure;
     try {
-      await _firebase.updateUserProfile(
-        current.copyWith(
+      await _firebase.requestProfileUpdate(
+        current: current,
+        requested: current.copyWith(
           name: _name.text,
           department: _course.text.trim(),
           course: _course.text.trim(),
@@ -292,7 +299,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           : failure?.toString() ?? 'Unable to update profile.';
     });
     messenger.showSnackBar(
-      SnackBar(content: Text(ok ? 'Profile updated.' : _profileError!)),
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Profile change request sent. Please wait for admin approval.'
+              : _profileError!,
+        ),
+      ),
     );
   }
 
@@ -536,19 +549,17 @@ class _ProfileForm extends StatelessWidget {
                   const SizedBox(height: 10),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Change Password'),
+                    title: const Text('Forgot Password'),
                     onTap: () async {
                       final messenger = ScaffoldMessenger.of(context);
                       final auth = context.read<AuthProvider>();
-                      final resetEmail =
-                          auth.passwordResetEmail ?? email.text.trim();
                       final ok = await auth.sendPasswordReset();
                       if (!context.mounted) return;
                       messenger.showSnackBar(
                         SnackBar(
                           content: Text(
                             ok
-                                ? 'Password reset email sent to $resetEmail.'
+                                ? 'Please check your email.'
                                 : auth.error ??
                                       'Unable to send password reset email.',
                           ),

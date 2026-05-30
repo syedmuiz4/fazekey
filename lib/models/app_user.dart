@@ -27,6 +27,9 @@ class AppUser {
     this.pendingPhotoUrl,
     this.photoChangeRequestedAt,
     this.photoUpdatedAt,
+    this.requiresPasswordChange = false,
+    this.temporaryPasswordIssuedAt,
+    this.temporaryPasswordExpiresAt,
   });
 
   final String id;
@@ -52,6 +55,9 @@ class AppUser {
   final String? pendingPhotoUrl;
   final DateTime? photoChangeRequestedAt;
   final DateTime? photoUpdatedAt;
+  final bool requiresPasswordChange;
+  final DateTime? temporaryPasswordIssuedAt;
+  final DateTime? temporaryPasswordExpiresAt;
 
   bool get isAdmin => role.trim().toLowerCase() == 'admin';
   bool get isApproved => status.trim().toLowerCase() == 'approved';
@@ -134,8 +140,12 @@ class AppUser {
     final registeredRooms = assignedRooms.map(_accessKey).toSet();
     if (registeredRooms.isEmpty) return false;
     final roomLabels = {
+      area.id,
       area.name,
       area.roomNumber,
+      '${area.floor} - ${area.name}',
+      '${area.location} - ${area.name}',
+      '${area.location} - ${area.floor} - ${area.name}',
       '${area.floor} - Room ${area.roomNumber}',
       '${area.location} - ${area.floor} - Room ${area.roomNumber}',
     }.map(_accessKey);
@@ -183,6 +193,11 @@ class AppUser {
       photoChangeRequestedAt: (map['photoChangeRequestedAt'] as Timestamp?)
           ?.toDate(),
       photoUpdatedAt: (map['photoUpdatedAt'] as Timestamp?)?.toDate(),
+      requiresPasswordChange: map['requiresPasswordChange'] == true,
+      temporaryPasswordIssuedAt:
+          (map['temporaryPasswordIssuedAt'] as Timestamp?)?.toDate(),
+      temporaryPasswordExpiresAt:
+          (map['temporaryPasswordExpiresAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -230,6 +245,15 @@ class AppUser {
       'photoChangeRequestedAt': Timestamp.fromDate(photoChangeRequestedAt!),
     if (photoUpdatedAt != null)
       'photoUpdatedAt': Timestamp.fromDate(photoUpdatedAt!),
+    'requiresPasswordChange': requiresPasswordChange,
+    if (temporaryPasswordIssuedAt != null)
+      'temporaryPasswordIssuedAt': Timestamp.fromDate(
+        temporaryPasswordIssuedAt!,
+      ),
+    if (temporaryPasswordExpiresAt != null)
+      'temporaryPasswordExpiresAt': Timestamp.fromDate(
+        temporaryPasswordExpiresAt!,
+      ),
   };
 
   AppUser copyWith({
@@ -254,6 +278,9 @@ class AppUser {
     String? pendingPhotoUrl,
     DateTime? photoChangeRequestedAt,
     DateTime? photoUpdatedAt,
+    bool? requiresPasswordChange,
+    DateTime? temporaryPasswordIssuedAt,
+    DateTime? temporaryPasswordExpiresAt,
   }) => AppUser(
     id: id,
     name: name ?? this.name,
@@ -279,5 +306,11 @@ class AppUser {
     photoChangeRequestedAt:
         photoChangeRequestedAt ?? this.photoChangeRequestedAt,
     photoUpdatedAt: photoUpdatedAt ?? this.photoUpdatedAt,
+    requiresPasswordChange:
+        requiresPasswordChange ?? this.requiresPasswordChange,
+    temporaryPasswordIssuedAt:
+        temporaryPasswordIssuedAt ?? this.temporaryPasswordIssuedAt,
+    temporaryPasswordExpiresAt:
+        temporaryPasswordExpiresAt ?? this.temporaryPasswordExpiresAt,
   );
 }

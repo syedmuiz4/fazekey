@@ -34,7 +34,7 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
     if (auth.loading && auth.user == null) {
       return const AppBackground(
         child: Scaffold(
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
           body: Center(child: CircularProgressIndicator()),
         ),
       );
@@ -42,7 +42,7 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
     if (!auth.isAdmin) {
       return const AppBackground(
         child: Scaffold(
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
           body: Center(child: Text('Management access is unavailable.')),
         ),
       );
@@ -50,7 +50,7 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
     final provider = context.watch<AreaProvider>();
     return AppBackground(
       child: Scaffold(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Add Rooms'),
           backgroundColor: Colors.transparent,
@@ -185,16 +185,20 @@ class _RoomDraft {
   final name = TextEditingController();
   final floor = TextEditingController();
   final capacity = TextEditingController(text: '25');
+  String floorChoice = commandCenterFloorOptions.first;
   String department = commandCenterDepartments.first;
   final Set<String> roles = {'Student', 'Staff'};
 
   Area toArea() {
     final roomName = name.text.trim();
+    final floorLabel = floorChoice == 'Other...'
+        ? floor.text.trim()
+        : floorChoice;
     return Area(
       id: '',
       name: roomName,
-      location: 'FAZEKEY Command Center',
-      floor: floor.text.trim(),
+      location: 'FSKTM',
+      floor: floorLabel,
       roomNumber: roomName,
       active: true,
       createdAt: DateTime.now(),
@@ -265,14 +269,34 @@ class _RoomDraftCardState extends State<_RoomDraftCard> {
             validator: _AddAreaScreenState._required,
           ),
           const SizedBox(height: 12),
-          TextFormField(
-            controller: draft.floor,
+          DropdownButtonFormField<String>(
+            initialValue: draft.floorChoice,
+            isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Floor Label',
               prefixIcon: Icon(Icons.layers_rounded),
             ),
-            validator: _AddAreaScreenState._required,
+            items: commandCenterFloorOptions
+                .map(
+                  (floor) => DropdownMenuItem(value: floor, child: Text(floor)),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => draft.floorChoice = value);
+            },
           ),
+          if (draft.floorChoice == 'Other...') ...[
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: draft.floor,
+              decoration: const InputDecoration(
+                labelText: 'Custom Floor Label',
+                prefixIcon: Icon(Icons.edit_location_alt_rounded),
+              ),
+              validator: _AddAreaScreenState._required,
+            ),
+          ],
           const SizedBox(height: 12),
           TextFormField(
             controller: draft.capacity,

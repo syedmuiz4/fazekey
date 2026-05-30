@@ -44,7 +44,7 @@ class SystemSettings {
     semesterStart: DateTime(2026, 3, 1),
     semesterEnd: DateTime(2026, 7, 31),
     updatedAt: DateTime.now(),
-    administratorEmail: 'administrator@campus-access.local',
+    administratorEmail: 'syedmuizzuddin03@gmail.com',
   );
 
   factory SystemSettings.fromMap(Map<String, dynamic>? map) {
@@ -71,7 +71,7 @@ class SystemSettings {
           map['administratorEmail'] ??
           map['adminEmail'] ??
           map['supportEmail'] ??
-          'administrator@campus-access.local',
+          'syedmuizzuddin03@gmail.com',
     );
   }
 

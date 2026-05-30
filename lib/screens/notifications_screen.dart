@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
@@ -23,7 +26,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<AlertProvider>().markAllRead();
+      if (!mounted) return;
+      unawaited(context.read<AlertProvider>().markAllRead().catchError((_) {}));
+      unawaited(
+        context.read<FirebaseService>().markAdminNotificationsRead().catchError(
+          (_) {},
+        ),
+      );
     });
   }
 
@@ -32,7 +41,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     final alerts = context.watch<AlertProvider>().alerts;
     return AppBackground(
       child: Scaffold(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Recent Alerts'),
           backgroundColor: Colors.transparent,
@@ -59,32 +68,62 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   builder: (context, supportSnapshot) {
                     final supportRequests =
                         supportSnapshot.data?.docs ?? const [];
-                    if (alerts.isEmpty &&
-                        requests.isEmpty &&
-                        resetRequests.isEmpty &&
-                        supportRequests.isEmpty) {
-                      return const _EmptyAlerts();
-                    }
-                    return ListView(
-                      padding: const EdgeInsets.all(18),
-                      children: [
-                        for (final request in supportRequests) ...[
-                          _SupportRequestCard(doc: request),
-                          const SizedBox(height: 12),
-                        ],
-                        for (final request in resetRequests) ...[
-                          _PasswordResetRequestCard(doc: request),
-                          const SizedBox(height: 12),
-                        ],
-                        for (final request in requests) ...[
-                          _RoomRequestCard(request: request),
-                          const SizedBox(height: 12),
-                        ],
-                        for (final alert in alerts) ...[
-                          _AlertCard(alert: alert),
-                          const SizedBox(height: 12),
-                        ],
-                      ],
+                    return StreamBuilder(
+                      stream: firebase.firestore
+                          .collection('profileChangeRequests')
+                          .where('status', isEqualTo: 'open')
+                          .snapshots(),
+                      builder: (context, profileSnapshot) {
+                        final profileRequests =
+                            profileSnapshot.data?.docs ?? const [];
+                        return StreamBuilder(
+                          stream: firebase.firestore
+                              .collection('profilePhotoRequests')
+                              .where('status', isEqualTo: 'open')
+                              .snapshots(),
+                          builder: (context, photoSnapshot) {
+                            final photoRequests =
+                                photoSnapshot.data?.docs ?? const [];
+                            if (alerts.isEmpty &&
+                                requests.isEmpty &&
+                                resetRequests.isEmpty &&
+                                supportRequests.isEmpty &&
+                                profileRequests.isEmpty &&
+                                photoRequests.isEmpty) {
+                              return const _EmptyAlerts();
+                            }
+                            return ListView(
+                              padding: const EdgeInsets.all(18),
+                              children: [
+                                for (final request in photoRequests) ...[
+                                  _ProfilePhotoRequestCard(doc: request),
+                                  const SizedBox(height: 12),
+                                ],
+                                for (final request in profileRequests) ...[
+                                  _ProfileChangeRequestCard(doc: request),
+                                  const SizedBox(height: 12),
+                                ],
+                                for (final request in supportRequests) ...[
+                                  _SupportRequestCard(doc: request),
+                                  const SizedBox(height: 12),
+                                ],
+                                for (final request in resetRequests) ...[
+                                  _PasswordResetRequestCard(doc: request),
+                                  const SizedBox(height: 12),
+                                ],
+                                for (final request in requests) ...[
+                                  _RoomRequestCard(request: request),
+                                  const SizedBox(height: 12),
+                                ],
+                                for (final alert in alerts) ...[
+                                  _AlertCard(alert: alert),
+                                  const SizedBox(height: 12),
+                                ],
+                              ],
+                            );
+                          },
+                        );
+                      },
                     );
                   },
                 );
@@ -149,6 +188,139 @@ class _SupportRequestCard extends StatelessWidget {
   }
 }
 
+class _ProfilePhotoRequestCard extends StatelessWidget {
+  const _ProfilePhotoRequestCard({required this.doc});
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    final data = doc.data();
+    final userId = (data['userId'] ?? '').toString();
+    final userName = (data['userName'] ?? 'User').toString();
+    final email = (data['email'] ?? '').toString();
+    final photoUrl = (data['photoUrl'] ?? '').toString();
+    final timestamp =
+        (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    final file = photoUrl.trim().isEmpty ? null : File(photoUrl);
+    final image = file != null && file.existsSync() ? FileImage(file) : null;
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Profile Picture Request',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 32,
+                backgroundImage: image,
+                child: image == null
+                    ? const Icon(Icons.person_rounded, size: 30)
+                    : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '$userName requested a new profile picture.\n'
+                  '$email\n'
+                  '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _DecisionButtons(
+            approveLabel: 'Approve',
+            denyLabel: 'Deny',
+            onApprove: () => firebase.decideProfilePhotoRequest(
+              requestId: doc.id,
+              userId: userId,
+              approved: true,
+            ),
+            onDeny: () => firebase.decideProfilePhotoRequest(
+              requestId: doc.id,
+              userId: userId,
+              approved: false,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileChangeRequestCard extends StatelessWidget {
+  const _ProfileChangeRequestCard({required this.doc});
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+
+  @override
+  Widget build(BuildContext context) {
+    final firebase = context.read<FirebaseService>();
+    final data = doc.data();
+    final userId = (data['userId'] ?? '').toString();
+    final userName = (data['userName'] ?? 'User').toString();
+    final email = (data['email'] ?? '').toString();
+    final requested = Map<String, dynamic>.from(
+      data['requested'] as Map? ?? const {},
+    );
+    final timestamp =
+        (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Profile Change Request',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$userName\n'
+            '$email\n'
+            '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+          ),
+          const SizedBox(height: 10),
+          _RequestDetail(label: 'Name', value: requested['name']),
+          _RequestDetail(label: 'Department', value: requested['department']),
+          _RequestDetail(label: 'Phone', value: requested['phone']),
+          _RequestDetail(
+            label: 'Home Address',
+            value: requested['homeAddress'],
+          ),
+          _RequestDetail(
+            label: 'Emergency Contact',
+            value: requested['emergencyContact'],
+          ),
+          const SizedBox(height: 12),
+          _DecisionButtons(
+            approveLabel: 'Approve',
+            denyLabel: 'Deny',
+            onApprove: () => firebase.decideProfileChangeRequest(
+              requestId: doc.id,
+              userId: userId,
+              approved: true,
+              requested: requested,
+            ),
+            onDeny: () => firebase.decideProfileChangeRequest(
+              requestId: doc.id,
+              userId: userId,
+              approved: false,
+              requested: requested,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PasswordResetRequestCard extends StatelessWidget {
   const _PasswordResetRequestCard({required this.doc});
 
@@ -158,6 +330,7 @@ class _PasswordResetRequestCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final firebase = context.read<FirebaseService>();
     final data = doc.data();
+    final userId = (data['userId'] ?? '').toString();
     final userName = (data['userName'] ?? 'User').toString();
     final email = (data['email'] ?? '').toString();
     final timestamp =
@@ -177,15 +350,19 @@ class _PasswordResetRequestCard extends StatelessWidget {
             '${DateFormat.yMMMd().add_jm().format(timestamp)}',
           ),
           const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () => firebase.firestore
-                .collection('passwordResetRequests')
-                .doc(doc.id)
-                .set({
-                  'status': 'handled',
-                  'handledAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true)),
-            child: const Text('Mark Handled'),
+          _DecisionButtons(
+            approveLabel: 'Approve',
+            denyLabel: 'Deny',
+            onApprove: () => firebase.decidePasswordResetRequest(
+              requestId: doc.id,
+              userId: userId,
+              approved: true,
+            ),
+            onDeny: () => firebase.decidePasswordResetRequest(
+              requestId: doc.id,
+              userId: userId,
+              approved: false,
+            ),
           ),
         ],
       ),
@@ -233,13 +410,59 @@ class _RoomRequestCard extends StatelessWidget {
                     request: request,
                     allowed: false,
                   ),
-                  child: const Text('Revoke'),
+                  child: const Text('Deny'),
                 ),
               ),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+class _RequestDetail extends StatelessWidget {
+  const _RequestDetail({required this.label, required this.value});
+
+  final String label;
+  final Object? value;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = value?.toString().trim() ?? '';
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text('$label: $text'),
+    );
+  }
+}
+
+class _DecisionButtons extends StatelessWidget {
+  const _DecisionButtons({
+    required this.approveLabel,
+    required this.denyLabel,
+    required this.onApprove,
+    required this.onDeny,
+  });
+
+  final String approveLabel;
+  final String denyLabel;
+  final VoidCallback onApprove;
+  final VoidCallback onDeny;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: FilledButton(onPressed: onApprove, child: Text(approveLabel)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: OutlinedButton(onPressed: onDeny, child: Text(denyLabel)),
+        ),
+      ],
     );
   }
 }

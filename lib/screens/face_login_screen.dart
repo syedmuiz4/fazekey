@@ -571,9 +571,10 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
   String _areaName(Area? area) {
     if (area == null) return 'No active room configured';
     final name = area.name.trim();
-    if (name.isNotEmpty) return name;
     final floor = area.floor.trim();
     final roomNumber = area.roomNumber.trim();
+    if (name.isNotEmpty && floor.isNotEmpty) return '$floor - $name';
+    if (name.isNotEmpty) return name;
     if (floor.isNotEmpty && roomNumber.isNotEmpty) {
       return '$floor - Room $roomNumber';
     }
@@ -701,8 +702,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     if (!mounted) return;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final target = context.read<AuthProvider>().hasSignedInAccount
-          ? DashboardScreen.route
+      final auth = context.read<AuthProvider>();
+      final target = auth.hasSignedInAccount
+          ? (auth.isAdmin ? DashboardScreen.route : UserDashboardScreen.route)
           : LoginScreen.route;
       Navigator.of(context).pushNamedAndRemoveUntil(target, (_) => false);
     });

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'corporate_chrome.dart';
-
 class PrimaryButton extends StatelessWidget {
   const PrimaryButton({
     super.key,
@@ -23,9 +21,9 @@ class PrimaryButton extends StatelessWidget {
       style: const TextStyle(fontWeight: FontWeight.w900),
     );
     final style = FilledButton.styleFrom(
-      backgroundColor: CorporateColors.teal,
+      backgroundColor: const Color(0xFF0D9488),
       foregroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
     );
     return SizedBox(
       width: double.infinity,

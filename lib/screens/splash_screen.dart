@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../widgets/app_background.dart';
 import 'dashboard_screen.dart';
+import 'user_dashboard_screen.dart';
 import 'welcome_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -30,10 +31,10 @@ class _SplashScreenState extends State<SplashScreen>
     Future.delayed(const Duration(milliseconds: 1400), () {
       if (!mounted) return;
       final auth = context.read<AuthProvider>();
-      Navigator.of(context).pushNamedAndRemoveUntil(
-        auth.isAuthenticated ? DashboardScreen.route : WelcomeScreen.route,
-        (_) => false,
-      );
+      final route = auth.isAuthenticated
+          ? (auth.isAdmin ? DashboardScreen.route : UserDashboardScreen.route)
+          : WelcomeScreen.route;
+      Navigator.of(context).pushNamedAndRemoveUntil(route, (_) => false);
     });
   }
 
@@ -48,7 +49,7 @@ class _SplashScreenState extends State<SplashScreen>
     return AppBackground(
       child: Scaffold(
         key: _scaffoldKey,
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppBackground.slateGray,
         body: Stack(
           alignment: Alignment.center,
           children: [
@@ -106,7 +107,7 @@ class _FaceIdentityLogoScan extends StatelessWidget {
           alignment: Alignment.center,
           children: [
             Image.asset(
-              'assets/images/logo2.png',
+              'assets/images/logo3_.png',
               width: logoWidth,
               fit: BoxFit.contain,
               filterQuality: FilterQuality.high,

@@ -16,12 +16,16 @@ class AuthProvider extends ChangeNotifier {
   bool loading = true;
   bool darkMode = false;
   String? error;
+  bool adminEmailUpdatePendingVerification = false;
 
   bool get isAuthenticated => user != null;
 
   bool get isAdmin => user?.isAdmin == true;
 
   bool get isUser => isAuthenticated && !isAdmin;
+
+  bool get requiresPasswordChange =>
+      user?.requiresPasswordChange == true && !isAdmin;
 
   bool get hasSignedInAccount => _firebase.currentUserId != null;
 
@@ -69,6 +73,13 @@ class AuthProvider extends ChangeNotifier {
       user = await _firebase.getUser(cred.user!.uid);
       final profile = user;
       if (profile != null) {
+        if (_firebase.isTemporaryPasswordExpired(profile)) {
+          await _firebase.signOut();
+          user = null;
+          throw Exception(
+            'Temporary password expired. Ask admin to send the temporary password again.',
+          );
+        }
         unawaited(_firebase.recordAppLogin(profile).catchError((_) {}));
       }
     });
@@ -196,8 +207,12 @@ class AuthProvider extends ChangeNotifier {
         emergencyContact: emergencyContact.trim(),
         photoUrl: photoUrl,
       );
-      await _firebase.updateUserProfile(next);
-      user = next;
+      if (current.isAdmin) {
+        await _firebase.updateUserProfile(next);
+        user = next;
+      } else {
+        await _firebase.requestProfileUpdate(current: current, requested: next);
+      }
     });
   }
 
@@ -209,6 +224,52 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
     return _guard(() => _firebase.sendPasswordResetEmail(email));
+  }
+
+  Future<bool> updateAdminPassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    return _guard(
+      () => _firebase.updateCurrentAccountPassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      ),
+    );
+  }
+
+  Future<bool> completeTemporaryPasswordChange({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    return _guard(() async {
+      await _firebase.completeTemporaryPasswordChange(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      final current = user;
+      if (current != null) {
+        user = current.copyWith(requiresPasswordChange: false);
+      }
+    });
+  }
+
+  Future<bool> updateAdminEmail({
+    required String currentPassword,
+    required String newEmail,
+  }) async {
+    adminEmailUpdatePendingVerification = false;
+    return _guard(() async {
+      final updatedImmediately = await _firebase.updateCurrentAccountEmail(
+        currentPassword: currentPassword,
+        newEmail: newEmail,
+      );
+      adminEmailUpdatePendingVerification = !updatedImmediately;
+      final current = user;
+      if (current != null && updatedImmediately) {
+        user = current.copyWith(email: newEmail.trim());
+      }
+    });
   }
 
   Future<bool> _guard(Future<void> Function() action) async {
@@ -251,7 +312,10 @@ class AuthProvider extends ChangeNotifier {
         left.photoUrl == right.photoUrl &&
         left.pendingPhotoUrl == right.pendingPhotoUrl &&
         left.photoChangeRequestedAt == right.photoChangeRequestedAt &&
-        left.photoUpdatedAt == right.photoUpdatedAt;
+        left.photoUpdatedAt == right.photoUpdatedAt &&
+        left.requiresPasswordChange == right.requiresPasswordChange &&
+        left.temporaryPasswordIssuedAt == right.temporaryPasswordIssuedAt &&
+        left.temporaryPasswordExpiresAt == right.temporaryPasswordExpiresAt;
   }
 
   bool _sameStringList(List<String> left, List<String> right) {

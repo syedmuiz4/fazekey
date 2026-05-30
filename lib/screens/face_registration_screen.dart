@@ -6,13 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
+import '../models/access_log.dart';
 import '../models/app_user.dart';
 import '../providers/alert_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/face_provider.dart';
 import '../widgets/face_overlay.dart';
 import '../widgets/primary_button.dart';
+import 'access_result_screen.dart';
 import 'dashboard_screen.dart';
+import 'user_dashboard_screen.dart';
 
 class FaceRegistrationScreen extends StatefulWidget {
   const FaceRegistrationScreen({super.key});
@@ -166,9 +169,11 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
     if (!mounted) return;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      Navigator.of(
-        context,
-      ).pushNamedAndRemoveUntil(DashboardScreen.route, (_) => false);
+      final auth = context.read<AuthProvider>();
+      final route = auth.isAdmin
+          ? DashboardScreen.route
+          : UserDashboardScreen.route;
+      Navigator.of(context).pushNamedAndRemoveUntil(route, (_) => false);
     });
   }
 
@@ -322,8 +327,37 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
                         SchedulerBinding.instance.addPostFrameCallback((_) {
                           if (!mounted) return;
                           final navigator = Navigator.of(context);
+                          if (selectedUser != null) {
+                            final now = DateTime.now();
+                            navigator.pushNamedAndRemoveUntil(
+                              AccessResultScreen.route,
+                              (_) => false,
+                              arguments: {
+                                'user': user.copyWith(hasFace: true),
+                                'log': AccessLog(
+                                  id: 'face_registration_${user.id}_${now.microsecondsSinceEpoch}',
+                                  userId: user.id,
+                                  userName: user.name.trim().isEmpty
+                                      ? user.id
+                                      : user.name.trim(),
+                                  areaId: 'face_registration',
+                                  areaName: 'Face Registration',
+                                  status: 'granted',
+                                  reason: 'Face identity profile verified',
+                                  timestamp: now,
+                                  synced: true,
+                                ),
+                                'dashboardRoute': DashboardScreen.route,
+                                'backRoute': DashboardScreen.route,
+                              },
+                            );
+                            return;
+                          }
+                          final route = authProvider.isAdmin
+                              ? DashboardScreen.route
+                              : UserDashboardScreen.route;
                           navigator.pushNamedAndRemoveUntil(
-                            DashboardScreen.route,
+                            route,
                             (_) => false,
                           );
                         });

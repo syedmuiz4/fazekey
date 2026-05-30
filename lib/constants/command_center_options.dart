@@ -21,12 +21,20 @@ const commandCenterRoomNames = <String>[
   'Network Core Operations',
 ];
 
+const commandCenterFloorOptions = <String>[
+  'Level G',
+  'Level 1',
+  'Level 2',
+  'Level 3',
+  'Other...',
+];
+
 final commandCenterAreas = <String, Area>{
   'ict_office': Area(
     id: 'ict_office',
     name: 'ICT Office',
-    location: 'FAZEKEY Command Center',
-    floor: 'ICT Division',
+    location: 'FSKTM',
+    floor: 'Level 2',
     roomNumber: 'ICT-01',
     active: true,
     createdAt: DateTime(2026),
@@ -38,7 +46,7 @@ final commandCenterAreas = <String, Area>{
   'general_office': Area(
     id: 'general_office',
     name: 'General Office',
-    location: 'FAZEKEY Command Center',
+    location: 'FSKTM',
     floor: 'Level G',
     roomNumber: 'GEN-01',
     active: true,
@@ -51,8 +59,8 @@ final commandCenterAreas = <String, Area>{
   'server_room': Area(
     id: 'server_room',
     name: 'Server Room',
-    location: 'FAZEKEY Command Center',
-    floor: 'Secure Infrastructure',
+    location: 'FSKTM',
+    floor: 'Level G',
     roomNumber: 'SR-01',
     active: true,
     createdAt: DateTime(2026, 1, 3),
@@ -64,8 +72,8 @@ final commandCenterAreas = <String, Area>{
   'file_room': Area(
     id: 'file_room',
     name: 'File Room',
-    location: 'FAZEKEY Command Center',
-    floor: 'Level G',
+    location: 'FSKTM',
+    floor: 'Level 3',
     roomNumber: 'FR-01',
     active: true,
     createdAt: DateTime(2026, 1, 4),
@@ -77,7 +85,7 @@ final commandCenterAreas = <String, Area>{
   'server_room_1': Area(
     id: 'server_room_1',
     name: 'Server Room 1',
-    location: 'FAZEKEY Command Center',
+    location: 'FSKTM',
     floor: 'Level 1',
     roomNumber: 'SR-1',
     active: true,
@@ -90,8 +98,8 @@ final commandCenterAreas = <String, Area>{
   'access_lab': Area(
     id: 'access_lab',
     name: 'Access Lab',
-    location: 'FAZEKEY Command Center',
-    floor: 'Level 1',
+    location: 'FSKTM',
+    floor: 'Level 3',
     roomNumber: 'AL-1',
     active: true,
     createdAt: DateTime(2026, 1, 6),
@@ -103,7 +111,7 @@ final commandCenterAreas = <String, Area>{
   'server_room_2': Area(
     id: 'server_room_2',
     name: 'Server Room 2',
-    location: 'FAZEKEY Command Center',
+    location: 'FSKTM',
     floor: 'Level 2',
     roomNumber: 'SR-2',
     active: true,
@@ -116,8 +124,8 @@ final commandCenterAreas = <String, Area>{
   'it_development_suite': Area(
     id: 'it_development_suite',
     name: 'IT Development Suite',
-    location: 'FAZEKEY Command Center',
-    floor: 'Level 2',
+    location: 'FSKTM',
+    floor: 'Level 3',
     roomNumber: 'IT-2',
     active: true,
     createdAt: DateTime(2026, 1, 8),
@@ -129,7 +137,7 @@ final commandCenterAreas = <String, Area>{
   'server_room_3': Area(
     id: 'server_room_3',
     name: 'Server Room 3',
-    location: 'FAZEKEY Command Center',
+    location: 'FSKTM',
     floor: 'Level 3',
     roomNumber: 'SR-3',
     active: true,
@@ -142,7 +150,7 @@ final commandCenterAreas = <String, Area>{
   'network_core_operations': Area(
     id: 'network_core_operations',
     name: 'Network Core Operations',
-    location: 'FAZEKEY Command Center',
+    location: 'FSKTM',
     floor: 'Level 3',
     roomNumber: 'NCO-3',
     active: true,

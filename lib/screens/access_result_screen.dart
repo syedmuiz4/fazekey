@@ -144,6 +144,9 @@ class _VerifiedDetails extends StatelessWidget {
     final room = log?.areaName.trim().isNotEmpty == true
         ? log!.areaName.trim()
         : user.assignedRoomsLabel;
+    final academicValue = user.position.trim().toLowerCase() == 'staff'
+        ? user.department
+        : user.course;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -163,12 +166,15 @@ class _VerifiedDetails extends StatelessWidget {
           value: _valueOrUnavailable(user.identityNumber),
         ),
         _ResultLine(label: 'Category', value: user.roleLabel),
-        _ResultLine(label: 'Room', value: _valueOrUnavailable(room)),
+        _ResultLine(
+          label: 'Room Status',
+          value: user.isAdmin ? 'Available' : _valueOrUnavailable(room),
+        ),
         _ResultLine(
           label: user.position.trim().toLowerCase() == 'staff'
               ? 'Department'
               : 'Programme',
-          value: _valueOrUnavailable(user.department),
+          value: _valueOrUnavailable(academicValue),
         ),
       ],
     );

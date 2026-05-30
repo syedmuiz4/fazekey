@@ -3,12 +3,14 @@ import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/access_grant.dart';
-import '../models/access_log.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
 import '../models/room_access_record.dart';
@@ -32,6 +34,8 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
   Timer? _timer;
   bool _nightMode = false;
   String _language = 'English';
+  bool _passwordDialogShowing = false;
+  String? _passwordDialogUserId;
 
   @override
   void initState() {
@@ -50,38 +54,242 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<AuthProvider>().user;
+    final auth = context.watch<AuthProvider>();
     final firebase = context.read<FirebaseService>();
     final text = _UserText(_language);
-    return AppBackground(
-      child: Scaffold(
-        backgroundColor: _nightMode
-            ? const Color(0xFF0F172A)
-            : Colors.transparent,
-        body: IndexedStack(
-          index: _index,
-          children: [
-            _HomeTab(user: user, firebase: firebase, clock: _clock, text: text),
-            _HistoryTab(user: user, firebase: firebase, text: text),
-            _ProfileTab(user: user, firebase: firebase, text: text),
-            _SettingsTab(
-              user: user,
-              firebase: firebase,
-              text: text,
-              language: _language,
-              nightMode: _nightMode,
-              onLanguageChanged: (value) => setState(() => _language = value),
-              onNightModeChanged: (value) => setState(() => _nightMode = value),
+    return StreamBuilder<AppUser?>(
+      stream: auth.watchActiveUserProfile(),
+      initialData: auth.user,
+      builder: (context, snapshot) {
+        final user = snapshot.data ?? auth.user;
+        if (user != null && user.requiresPasswordChange && !user.isAdmin) {
+          _scheduleTemporaryPasswordChange(user);
+        }
+        return AppBackground(
+          child: Scaffold(
+            backgroundColor: _nightMode
+                ? const Color(0xFF0F172A)
+                : AppBackground.slateGray,
+            body: IndexedStack(
+              index: _index,
+              children: [
+                _HomeTab(
+                  user: user,
+                  firebase: firebase,
+                  clock: _clock,
+                  text: text,
+                ),
+                _HistoryTab(user: user, firebase: firebase, text: text),
+                _ProfileTab(user: user, firebase: firebase, text: text),
+                _SettingsTab(
+                  user: user,
+                  firebase: firebase,
+                  text: text,
+                  language: _language,
+                  nightMode: _nightMode,
+                  onLanguageChanged: (value) =>
+                      setState(() => _language = value),
+                  onNightModeChanged: (value) =>
+                      setState(() => _nightMode = value),
+                ),
+              ],
             ),
-          ],
+            bottomNavigationBar: _UserBottomBar(
+              selectedIndex: _index,
+              onChanged: (value) => setState(() => _index = value),
+              text: text,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _scheduleTemporaryPasswordChange(AppUser user) {
+    if (_passwordDialogShowing && _passwordDialogUserId == user.id) return;
+    _passwordDialogShowing = true;
+    _passwordDialogUserId = user.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _TemporaryPasswordChangeDialog(user: user),
+      );
+      if (!mounted) return;
+      _passwordDialogShowing = false;
+      final current = context.read<AuthProvider>().user;
+      if (current?.requiresPasswordChange == true && current?.isAdmin != true) {
+        _scheduleTemporaryPasswordChange(current!);
+      } else {
+        _passwordDialogUserId = null;
+      }
+    });
+  }
+}
+
+class _TemporaryPasswordChangeDialog extends StatefulWidget {
+  const _TemporaryPasswordChangeDialog({required this.user});
+
+  final AppUser user;
+
+  @override
+  State<_TemporaryPasswordChangeDialog> createState() =>
+      _TemporaryPasswordChangeDialogState();
+}
+
+class _TemporaryPasswordChangeDialogState
+    extends State<_TemporaryPasswordChangeDialog> {
+  final _form = GlobalKey<FormState>();
+  final _currentPassword = TextEditingController();
+  final _newPassword = TextEditingController();
+  final _confirmPassword = TextEditingController();
+  bool _submitted = false;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _currentPassword.dispose();
+    _newPassword.dispose();
+    _confirmPassword.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+        title: const Text('Change temporary password'),
+        content: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Form(
+              key: _form,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'For account accountability, replace the temporary password before continuing as ${widget.user.name.trim().isEmpty ? widget.user.email : widget.user.name}.',
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Use at least 12 characters.\nCombine uppercase/lowercase letters, numbers, and symbols.',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _currentPassword,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Temporary Password',
+                    ),
+                    validator: _required,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _newPassword,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'New Password',
+                    ),
+                    validator: _newPasswordValidator,
+                  ),
+                  const SizedBox(height: 10),
+                  TextFormField(
+                    controller: _confirmPassword,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Confirm New Password',
+                    ),
+                    validator: (value) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Required';
+                      }
+                      if (value.trim() != _newPassword.text.trim()) {
+                        return 'Passwords do not match';
+                      }
+                      return null;
+                    },
+                  ),
+                  if (_submitted && _error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
         ),
-        bottomNavigationBar: _UserBottomBar(
-          selectedIndex: _index,
-          onChanged: (value) => setState(() => _index = value),
-          text: text,
-        ),
+        actions: [
+          FilledButton.icon(
+            onPressed: _saving ? null : _submit,
+            icon: _saving
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.lock_reset_rounded),
+            label: Text(_saving ? 'Updating' : 'Update Password'),
+          ),
+        ],
       ),
     );
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _submitted = true;
+      _error = null;
+    });
+    if (!_form.currentState!.validate()) return;
+    setState(() => _saving = true);
+    final auth = context.read<AuthProvider>();
+    final ok = await auth.completeTemporaryPasswordChange(
+      currentPassword: _currentPassword.text,
+      newPassword: _newPassword.text,
+    );
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _saving = false;
+        _error = auth.error ?? 'Unable to update password.';
+      });
+      return;
+    }
+    setState(() => _saving = false);
+    Navigator.of(context).pop();
+  }
+
+  String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Required' : null;
+
+  String? _newPasswordValidator(String? value) {
+    final password = value?.trim() ?? '';
+    if (password.isEmpty) return 'Required';
+    if (password.length < 12) return 'Use at least 12 characters';
+    if (!RegExp(r'[A-Z]').hasMatch(password)) {
+      return 'Add an uppercase letter';
+    }
+    if (!RegExp(r'[a-z]').hasMatch(password)) {
+      return 'Add a lowercase letter';
+    }
+    if (!RegExp(r'\d').hasMatch(password)) return 'Add a number';
+    if (!RegExp(r'[^A-Za-z0-9]').hasMatch(password)) {
+      return 'Add a symbol';
+    }
+    if (password == _currentPassword.text.trim()) {
+      return 'Use a different password';
+    }
+    return null;
   }
 }
 
@@ -111,17 +319,9 @@ class _HomeTab extends StatelessWidget {
           _Panel(
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 24,
-                  backgroundColor: const Color(0xFFCCFBF1),
-                  child: Text(
-                    displayName.characters.first.toUpperCase(),
-                    style: const TextStyle(
-                      color: Color(0xFF0F766E),
-                      fontWeight: FontWeight.w900,
-                      fontSize: 18,
-                    ),
-                  ),
+                _SmallProfileAvatar(
+                  photoPath: user?.photoUrl,
+                  fallback: displayName.characters.first.toUpperCase(),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -130,7 +330,7 @@ class _HomeTab extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        displayName,
+                        text.welcomeUser(displayName),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleMedium
@@ -141,37 +341,59 @@ class _HomeTab extends StatelessWidget {
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        text.homeSubtitle,
+                        text.homeSubtitleFor(user),
                         style: const TextStyle(
                           color: Color(0xFF64748B),
                           fontWeight: FontWeight.w800,
                         ),
                       ),
+                      if (text.homeAcademicTitleFor(user) != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          text.homeAcademicTitleFor(user)!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFF0D9488),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
                 const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      DateFormat('d MMM yyyy').format(clock),
-                      style: const TextStyle(
-                        color: Color(0xFF0F172A),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                      ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          DateFormat('d MMM yyyy').format(clock),
+                          style: const TextStyle(
+                            color: Color(0xFF0F172A),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          DateFormat('h:mm:ss a').format(clock),
+                          style: const TextStyle(
+                            color: Color(0xFF0D9488),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      DateFormat('h:mm:ss a').format(clock),
-                      style: const TextStyle(
-                        color: Color(0xFF0D9488),
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13,
-                      ),
-                    ),
+                    if (user != null) ...[
+                      const SizedBox(width: 4),
+                      _UserNotificationBell(user: user!, firebase: firebase),
+                    ],
                   ],
                 ),
               ],
@@ -188,7 +410,7 @@ class _HomeTab extends StatelessWidget {
             child: Opacity(
               opacity: .5,
               child: Image.asset(
-                'assets/images/logo2.png',
+                'assets/images/logo3_.png',
                 width: 118,
                 fit: BoxFit.contain,
                 filterQuality: FilterQuality.high,
@@ -409,17 +631,16 @@ class _CurrentRoomCard extends StatelessWidget {
           stream: firebase.watchAreas(),
           builder: (context, areaSnapshot) {
             final areas = areaSnapshot.data ?? const <Area>[];
-            return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: firebase.activeRoomSessionsRef
-                  .doc(currentUser.id)
-                  .snapshots(),
+            return StreamBuilder<List<RoomAccessRecord>>(
+              stream: firebase.watchActiveRoomSessions(),
               builder: (context, snapshot) {
-                final data = snapshot.data?.data();
-                final record = data == null
-                    ? null
-                    : RoomAccessRecord.fromMap(snapshot.data!.id, data);
-                final activeGrant = _activeGrant(grants);
-                final accessRoom = record?.areaName ?? activeGrant?.areaName;
+                final activeSessions =
+                    snapshot.data ?? const <RoomAccessRecord>[];
+                final record = _activeSessionForUser(
+                  activeSessions,
+                  currentUser.id,
+                );
+                final accessRoom = record?.areaName;
                 return _Panel(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -478,6 +699,7 @@ class _CurrentRoomCard extends StatelessWidget {
                       _RoomCapacityList(
                         rooms: _visibleRooms(currentUser, grants),
                         areas: areas,
+                        activeSessions: activeSessions,
                       ),
                       if (record != null) ...[
                         const SizedBox(height: 12),
@@ -621,7 +843,8 @@ class _NewRoomRequestDialog extends StatefulWidget {
 }
 
 class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
-  Area? _selected;
+  String? _selectedAreaId;
+  List<Area> _activeAreas = const [];
   bool _sending = false;
 
   @override
@@ -631,21 +854,31 @@ class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
       content: StreamBuilder<List<Area>>(
         stream: widget.firebase.watchAreas(),
         builder: (context, snapshot) {
-          final areas = (snapshot.data ?? const <Area>[])
-              .where((area) => area.active)
-              .toList();
+          final areas = _uniqueActiveAreas(snapshot.data ?? const <Area>[]);
           if (areas.isEmpty) return Text(widget.text.noRoomsAvailable);
-          _selected ??= areas.first;
-          return DropdownButtonFormField<Area>(
-            initialValue: _selected,
+          _activeAreas = areas;
+          final selectedId = areas.any((area) => area.id == _selectedAreaId)
+              ? _selectedAreaId
+              : areas.first.id;
+          _selectedAreaId = selectedId;
+          return DropdownButtonFormField<String>(
+            initialValue: selectedId,
+            isExpanded: true,
             decoration: InputDecoration(labelText: widget.text.currentRoom),
             items: [
               for (final area in areas)
-                DropdownMenuItem(value: area, child: Text(_areaDisplay(area))),
+                DropdownMenuItem(
+                  value: area.id,
+                  child: Text(
+                    _areaDisplay(area),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
             ],
             onChanged: _sending
                 ? null
-                : (value) => setState(() => _selected = value),
+                : (value) => setState(() => _selectedAreaId = value),
           );
         },
       ),
@@ -655,7 +888,7 @@ class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
           child: Text(widget.text.close),
         ),
         FilledButton.icon(
-          onPressed: _sending || _selected == null ? null : _sendRequest,
+          onPressed: _sending || _selectedAreaId == null ? null : _sendRequest,
           icon: _sending
               ? const SizedBox(
                   width: 16,
@@ -670,7 +903,7 @@ class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
   }
 
   Future<void> _sendRequest() async {
-    final area = _selected;
+    final area = _selectedArea();
     if (area == null) return;
     setState(() => _sending = true);
     try {
@@ -691,6 +924,15 @@ class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
         context,
       ).showSnackBar(SnackBar(content: Text(e.toString())));
     }
+  }
+
+  Area? _selectedArea() {
+    final selectedId = _selectedAreaId;
+    if (selectedId == null) return null;
+    for (final area in _activeAreas) {
+      if (area.id == selectedId) return area;
+    }
+    return null;
   }
 }
 
@@ -732,10 +974,15 @@ class _InlineInfo extends StatelessWidget {
 }
 
 class _RoomCapacityList extends StatelessWidget {
-  const _RoomCapacityList({required this.rooms, required this.areas});
+  const _RoomCapacityList({
+    required this.rooms,
+    required this.areas,
+    required this.activeSessions,
+  });
 
   final List<String> rooms;
   final List<Area> areas;
+  final List<RoomAccessRecord> activeSessions;
 
   @override
   Widget build(BuildContext context) {
@@ -745,7 +992,11 @@ class _RoomCapacityList extends StatelessWidget {
         for (final room in rooms.take(4))
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: _RoomCapacityRow(room: room, area: _matchingArea(room)),
+            child: _RoomCapacityRow(
+              room: room,
+              area: _matchingArea(room),
+              activeSessions: activeSessions,
+            ),
           ),
       ],
     );
@@ -754,9 +1005,7 @@ class _RoomCapacityList extends StatelessWidget {
   Area? _matchingArea(String room) {
     final key = _accessKey(room);
     for (final area in areas) {
-      if (_accessKey(area.name) == key ||
-          _accessKey(area.roomNumber) == key ||
-          _accessKey('${area.floor} - Room ${area.roomNumber}') == key) {
+      if (_areaRoomKeys(area).contains(key)) {
         return area;
       }
     }
@@ -765,15 +1014,25 @@ class _RoomCapacityList extends StatelessWidget {
 }
 
 class _RoomCapacityRow extends StatelessWidget {
-  const _RoomCapacityRow({required this.room, required this.area});
+  const _RoomCapacityRow({
+    required this.room,
+    required this.area,
+    required this.activeSessions,
+  });
 
   final String room;
   final Area? area;
+  final List<RoomAccessRecord> activeSessions;
 
   @override
   Widget build(BuildContext context) {
-    final capacity = area?.capacity ?? 0;
-    final occupied = area?.currentOccupancy ?? 0;
+    final currentArea = area;
+    final capacity = currentArea?.capacity ?? 0;
+    final occupied = currentArea == null
+        ? 0
+        : activeSessions
+              .where((session) => _sessionBelongsToArea(session, currentArea))
+              .length;
     final label = capacity <= 0
         ? 'Capacity available'
         : '$occupied / $capacity occupied';
@@ -811,11 +1070,22 @@ class _RoomCapacityRow extends StatelessWidget {
   }
 }
 
-AccessGrant? _activeGrant(List<AccessGrant> grants) {
-  final now = DateTime.now();
-  final active = grants.where((grant) => grant.isActiveAt(now)).toList()
-    ..sort((a, b) => a.endAt.compareTo(b.endAt));
-  return active.isEmpty ? null : active.first;
+RoomAccessRecord? _activeSessionForUser(
+  List<RoomAccessRecord> sessions,
+  String userId,
+) {
+  for (final session in sessions) {
+    if (session.userId == userId) return session;
+  }
+  return null;
+}
+
+bool _sessionBelongsToArea(RoomAccessRecord session, Area area) {
+  if (session.areaId.trim().isNotEmpty && session.areaId == area.id) {
+    return true;
+  }
+  final key = _accessKey(session.areaName);
+  return _areaRoomKeys(area).contains(key);
 }
 
 DateTime? _latestGrantExpiry(List<AccessGrant> grants) {
@@ -858,10 +1128,14 @@ class _HistoryTab extends StatelessWidget {
     if (currentUser == null) return const SizedBox.shrink();
     return SafeArea(
       bottom: false,
-      child: StreamBuilder<List<AccessLog>>(
-        stream: firebase.watchUserLogs(currentUser.id, limit: 80),
+      child: StreamBuilder<List<RoomAccessRecord>>(
+        stream: firebase.watchRoomAccessRecords(limit: 200),
         builder: (context, snapshot) {
-          final logs = snapshot.data ?? const <AccessLog>[];
+          final records =
+              (snapshot.data ?? const <RoomAccessRecord>[])
+                  .where((record) => record.userId == currentUser.id)
+                  .toList()
+                ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
           return ListView(
             padding: const EdgeInsets.all(18),
             children: [
@@ -870,30 +1144,30 @@ class _HistoryTab extends StatelessWidget {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 12),
-              _HistorySummary(logs: logs),
+              _HistorySummary(records: records),
               const SizedBox(height: 12),
-              if (logs.isEmpty)
+              if (records.isEmpty)
                 const _Panel(child: Text('No access history yet.'))
               else
-                for (final log in logs)
+                for (final record in records)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: _Panel(
                       child: ListTile(
                         contentPadding: EdgeInsets.zero,
                         title: Text(
-                          log.areaName,
+                          record.areaName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                         subtitle: Text(
-                          DateFormat.yMMMd().add_jm().format(log.timestamp),
+                          DateFormat.yMMMd().add_jm().format(record.timestamp),
                         ),
                         trailing: Text(
-                          log.status.toUpperCase(),
+                          record.event.toUpperCase(),
                           style: TextStyle(
-                            color: log.granted
+                            color: record.isEntry
                                 ? const Color(0xFF16A34A)
                                 : const Color(0xFFE11D48),
                             fontWeight: FontWeight.w900,
@@ -928,7 +1202,7 @@ class _ProfileTab extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(18),
         children: [
-          _ProfilePassCard(pass: pass),
+          _ProfilePassCard(pass: pass, user: user, firebase: firebase),
           if (user != null) ...[
             const SizedBox(height: 14),
             StreamBuilder<List<AccessGrant>>(
@@ -975,15 +1249,15 @@ class _ProfileTab extends StatelessWidget {
 }
 
 class _HistorySummary extends StatelessWidget {
-  const _HistorySummary({required this.logs});
+  const _HistorySummary({required this.records});
 
-  final List<AccessLog> logs;
+  final List<RoomAccessRecord> records;
 
   @override
   Widget build(BuildContext context) {
     final counts = <String, int>{};
-    for (final log in logs) {
-      counts.update(log.areaName, (value) => value + 1, ifAbsent: () => 1);
+    for (final record in records.where((record) => record.isEntry)) {
+      counts.update(record.areaName, (value) => value + 1, ifAbsent: () => 1);
     }
     final entries = counts.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
@@ -1046,6 +1320,7 @@ class _SettingsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final selectedLanguage = _validLanguage(language);
     return SafeArea(
       bottom: false,
       child: ListView(
@@ -1056,6 +1331,10 @@ class _SettingsTab extends StatelessWidget {
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 12),
+          if (user != null) ...[
+            _SettingsProfileCard(user: user!, firebase: firebase),
+            const SizedBox(height: 10),
+          ],
           _Panel(
             child: ListTile(
               contentPadding: EdgeInsets.zero,
@@ -1105,15 +1384,25 @@ class _SettingsTab extends StatelessWidget {
                 final auth = context.read<AuthProvider>();
                 final ok = await auth.sendPasswordReset();
                 if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      ok
-                          ? text.passwordEmailSent
-                          : auth.error ?? text.actionFailed,
+                if (ok) {
+                  await showDialog<void>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: Text(text.forgotPassword),
+                      content: Text(text.checkEmail),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text(text.close),
+                        ),
+                      ],
                     ),
-                  ),
-                );
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(auth.error ?? text.actionFailed)),
+                  );
+                }
               },
             ),
           ),
@@ -1131,7 +1420,7 @@ class _SettingsTab extends StatelessWidget {
                   ),
                 ),
                 DropdownButtonFormField<String>(
-                  initialValue: language,
+                  initialValue: selectedLanguage,
                   decoration: InputDecoration(labelText: text.language),
                   items: const [
                     DropdownMenuItem(value: 'English', child: Text('English')),
@@ -1164,6 +1453,152 @@ class _SettingsTab extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _UserNotificationBell extends StatelessWidget {
+  const _UserNotificationBell({required this.user, required this.firebase});
+
+  final AppUser user;
+  final FirebaseService firebase;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: firebase.watchUserNotifications(user.id, limit: 30),
+      builder: (context, snapshot) {
+        final docs = [...?snapshot.data?.docs]
+          ..sort((a, b) {
+            final aTime = (a.data()['createdAt'] as Timestamp?)?.toDate();
+            final bTime = (b.data()['createdAt'] as Timestamp?)?.toDate();
+            return (bTime ?? DateTime(0)).compareTo(aTime ?? DateTime(0));
+          });
+        final unread = docs.where((doc) => doc.data()['read'] != true).length;
+        return IconButton(
+          tooltip: 'Notifications',
+          onPressed: () => _showNotifications(context, docs),
+          icon: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.notifications_rounded),
+              if (unread > 0)
+                Positioned(
+                  right: -4,
+                  top: -4,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE11D48),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        unread > 9 ? '9+' : '$unread',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showNotifications(
+    BuildContext context,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    final visibleDocs = docs.take(12).toList();
+    unawaited(firebase.markUserNotificationsRead(user.id).catchError((_) {}));
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Notifications'),
+        content: SizedBox(
+          width: 420,
+          child: docs.isEmpty
+              ? const Text('No notifications yet.')
+              : SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final doc in visibleDocs) ...[
+                        _UserNotificationTile(data: doc.data()),
+                        if (doc != visibleDocs.last) const Divider(height: 16),
+                      ],
+                    ],
+                  ),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsProfileCard extends StatelessWidget {
+  const _SettingsProfileCard({required this.user, required this.firebase});
+
+  final AppUser user;
+  final FirebaseService firebase;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ProfilePassCard(
+      pass: _AccessPass.fromUser(user),
+      user: user,
+      firebase: firebase,
+    );
+  }
+}
+
+class _UserNotificationTile extends StatelessWidget {
+  const _UserNotificationTile({required this.data});
+
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = (data['title'] ?? 'Notification').toString();
+    final message = (data['message'] ?? '').toString();
+    final createdAt =
+        (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.notifications_active_rounded, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+              const SizedBox(height: 2),
+              Text(message),
+              const SizedBox(height: 2),
+              Text(
+                DateFormat.yMMMd().add_jm().format(createdAt),
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1317,18 +1752,30 @@ class _Panel extends StatelessWidget {
 }
 
 class _ProfilePassCard extends StatelessWidget {
-  const _ProfilePassCard({required this.pass});
+  const _ProfilePassCard({required this.pass, this.user, this.firebase});
   final _AccessPass pass;
+  final AppUser? user;
+  final FirebaseService? firebase;
 
   @override
   Widget build(BuildContext context) {
+    final profileUser = user;
+    final profileFirebase = firebase;
     return _Panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              _ProfileAvatar(photoPath: pass.photoPath),
+              _ProfileAvatar(
+                photoPath: pass.photoPath,
+                action: profileUser == null || profileFirebase == null
+                    ? null
+                    : _ProfilePhotoRequestButton(
+                        user: profileUser,
+                        firebase: profileFirebase,
+                      ),
+              ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -1370,31 +1817,187 @@ class _ProfilePassCard extends StatelessWidget {
 }
 
 class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({required this.photoPath});
+  const _ProfileAvatar({required this.photoPath, this.action});
   final String? photoPath;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
     final provider = _photoProvider();
-    return CircleAvatar(
-      radius: 38,
-      backgroundColor: const Color(0xFFCCFBF1),
-      backgroundImage: provider,
-      child: provider == null
-          ? const Icon(
-              Icons.face_retouching_natural_rounded,
-              color: Color(0xFF0F766E),
-              size: 34,
-            )
-          : null,
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        CircleAvatar(
+          radius: 38,
+          backgroundColor: const Color(0xFFCCFBF1),
+          backgroundImage: provider,
+          child: provider == null
+              ? const Icon(
+                  Icons.face_retouching_natural_rounded,
+                  color: Color(0xFF0F766E),
+                  size: 34,
+                )
+              : null,
+        ),
+        if (action != null) Positioned(right: -6, bottom: -6, child: action!),
+      ],
     );
   }
 
   ImageProvider<Object>? _photoProvider() {
-    final path = photoPath?.trim();
-    if (path == null || path.isEmpty) return null;
-    final file = File(path);
-    return file.existsSync() ? FileImage(file) : null;
+    return _profilePhotoProvider(photoPath);
+  }
+}
+
+class _ProfilePhotoRequestButton extends StatefulWidget {
+  const _ProfilePhotoRequestButton({
+    required this.user,
+    required this.firebase,
+  });
+
+  final AppUser user;
+  final FirebaseService firebase;
+
+  @override
+  State<_ProfilePhotoRequestButton> createState() =>
+      _ProfilePhotoRequestButtonState();
+}
+
+class _ProfilePhotoRequestButtonState
+    extends State<_ProfilePhotoRequestButton> {
+  bool _busy = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton.filledTonal(
+      tooltip: 'Request profile picture change',
+      constraints: const BoxConstraints.tightFor(width: 42, height: 42),
+      onPressed: _busy ? null : _requestPhoto,
+      icon: _busy
+          ? const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.photo_camera_rounded, size: 20),
+    );
+  }
+
+  Future<void> _requestPhoto() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final blockReason = _profilePhotoBlockReason(widget.user);
+    if (blockReason != null) {
+      messenger.showSnackBar(SnackBar(content: Text(blockReason)));
+      return;
+    }
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 86,
+        maxWidth: 1200,
+      );
+      if (picked == null) return;
+      final saved = await _persistProfileImage(picked);
+      await widget.firebase.requestProfilePhotoUpdate(
+        userId: widget.user.id,
+        photoUrl: saved.path,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Profile picture sent for admin approval.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Unable to update profile picture: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<File> _persistProfileImage(XFile picked) async {
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(docs.path, 'profile_pictures'));
+    await dir.create(recursive: true);
+    final extension = p.extension(picked.path).trim().isEmpty
+        ? '.jpg'
+        : p.extension(picked.path);
+    final fileName =
+        '${widget.user.id}-${DateTime.now().millisecondsSinceEpoch}$extension';
+    return File(picked.path).copy(p.join(dir.path, fileName));
+  }
+}
+
+ImageProvider<Object>? _profilePhotoProvider(String? photoPath) {
+  final path = photoPath?.trim();
+  if (path == null || path.isEmpty) return null;
+  final file = File(path);
+  return file.existsSync() ? FileImage(file) : null;
+}
+
+String? _profilePhotoBlockReason(AppUser user) {
+  if (user.hasPendingPhotoApproval) {
+    return 'Profile picture request is waiting for admin review.';
+  }
+  final now = DateTime.now();
+  final lastChange = user.photoUpdatedAt ?? user.photoChangeRequestedAt;
+  if (lastChange != null &&
+      lastChange.year == now.year &&
+      lastChange.month == now.month) {
+    return 'Profile picture can be changed again next month.';
+  }
+  return null;
+}
+
+class _SmallProfileAvatar extends StatelessWidget {
+  const _SmallProfileAvatar({required this.photoPath, required this.fallback});
+
+  final String? photoPath;
+  final String fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = _profilePhotoProvider(photoPath);
+    return CircleAvatar(
+      radius: 24,
+      backgroundColor: const Color(0xFFCCFBF1),
+      backgroundImage: provider,
+      child: provider == null
+          ? Text(
+              fallback,
+              style: const TextStyle(
+                color: Color(0xFF0F766E),
+                fontWeight: FontWeight.w900,
+                fontSize: 18,
+              ),
+            )
+          : null,
+    );
   }
 }
 
@@ -1504,9 +2107,7 @@ class _RoomPermissionGrid extends StatelessWidget {
   Area? _matchingArea(String room) {
     final key = _accessKey(room);
     for (final area in areas) {
-      if (_accessKey(area.name) == key ||
-          _accessKey(area.roomNumber) == key ||
-          _accessKey('${area.floor} - Room ${area.roomNumber}') == key) {
+      if (_areaRoomKeys(area).contains(key)) {
         return area;
       }
     }
@@ -1733,11 +2334,61 @@ _CampusNews? _matchingNews(List<_CampusNews> news, int order) {
 
 String _areaDisplay(Area area) {
   final name = area.name.trim();
-  if (name.isNotEmpty) return name;
   final room = area.roomNumber.trim();
+  if (name.isNotEmpty) return name;
+  if (room.isNotEmpty) return 'Room $room';
+  return area.id.trim().isEmpty ? 'Room Asset' : area.id.trim();
+}
+
+Set<String> _areaRoomKeys(Area area) {
   final floor = area.floor.trim();
-  if (room.isEmpty) return floor.isEmpty ? area.id : floor;
-  return floor.isEmpty ? 'Room $room' : '$floor - Room $room';
+  final roomNumber = area.roomNumber.trim();
+  final location = area.location.trim();
+  final floorRoom = floor.isNotEmpty && roomNumber.isNotEmpty
+      ? '$floor - Room $roomNumber'
+      : '';
+  final locationFloorRoom = location.isNotEmpty && floorRoom.isNotEmpty
+      ? '$location - $floorRoom'
+      : '';
+  return {
+    area.id,
+    area.name,
+    area.roomNumber,
+    if (floor.isNotEmpty && area.name.trim().isNotEmpty)
+      '$floor - ${area.name}',
+    if (location.isNotEmpty && area.name.trim().isNotEmpty)
+      '$location - ${area.name}',
+    if (location.isNotEmpty && floor.isNotEmpty && area.name.trim().isNotEmpty)
+      '$location - $floor - ${area.name}',
+    if (roomNumber.isNotEmpty) 'Room $roomNumber',
+    floorRoom,
+    locationFloorRoom,
+    _areaDisplay(area),
+  }.map(_accessKey).where((value) => value.isNotEmpty).toSet();
+}
+
+List<Area> _uniqueActiveAreas(List<Area> source) {
+  final areas = <Area>[];
+  final keys = <String>{};
+  for (final area in source.where((area) => area.active)) {
+    final key = area.id.trim().isNotEmpty
+        ? area.id.trim()
+        : _accessKey(_areaDisplay(area));
+    if (key.isEmpty || !keys.add(key)) continue;
+    areas.add(area);
+  }
+  areas.sort((a, b) => _areaDisplay(a).compareTo(_areaDisplay(b)));
+  return areas;
+}
+
+String _validLanguage(String value) {
+  return value == 'Malay' ? 'Malay' : 'English';
+}
+
+String _userDisplayId(AppUser user) {
+  final identity = user.identityNumber.trim();
+  if (identity.isNotEmpty) return identity;
+  return user.id.length <= 8 ? user.id : user.id.substring(0, 8);
 }
 
 String _programmeName(AppUser? user) {
@@ -1746,6 +2397,18 @@ String _programmeName(AppUser? user) {
     user?.department,
     user?.faculty,
   ].whereType<String>().join(' ').toLowerCase();
+  if (source.contains('doctor of philosophy') || source.contains('phd')) {
+    return 'Doctor of Philosophy (PhD) in Information Technology';
+  }
+  if (source.contains('master') && source.contains('software')) {
+    return 'Master of Computer Science (Software Engineering)';
+  }
+  if (source.contains('master') && source.contains('information security')) {
+    return 'Master of Computer Science (Information Security)';
+  }
+  if (source.contains('master')) {
+    return 'Master of Information Technology';
+  }
   if (source.contains('multimedia') || source.contains('bim')) {
     return 'Bachelor of Computer Science (Multimedia Computing) with Honours - BIM';
   }
@@ -1775,7 +2438,39 @@ class _UserText {
   bool get _ms => locale == 'Malay';
 
   String get welcomeBack => _ms ? 'Selamat kembali' : 'Welcome back';
+  String welcomeUser(String name) =>
+      _ms ? 'Selamat datang, $name' : 'Welcome, $name';
   String get homeSubtitle => _ms ? 'Akses kampus aktif' : 'Campus access';
+  String homeSubtitleFor(AppUser? user) {
+    final role = user?.role.trim().toLowerCase() ?? '';
+    if (role == 'admin') return _ms ? 'Akses admin' : 'Admin access';
+    final id = user == null ? '' : _userDisplayId(user);
+    if (id.isEmpty) return _ms ? 'ID tidak tersedia' : 'ID unavailable';
+    return _ms ? 'ID: $id' : 'ID: $id';
+  }
+
+  String? homeAcademicTitleFor(AppUser? user) {
+    final position = user?.position.trim().toLowerCase() ?? '';
+    final role = user?.role.trim().toLowerCase() ?? '';
+    if (role == 'admin' || position == 'staff' || role == 'staff') {
+      return null;
+    }
+    final source = [
+      user?.course,
+      user?.department,
+      user?.faculty,
+    ].whereType<String>().join(' ').toLowerCase();
+    if (source.contains('master') ||
+        source.contains('phd') ||
+        source.contains('doctor of philosophy')) {
+      return _ms ? 'Pascasiswazah' : 'Postgraduate';
+    }
+    if (source.contains('bachelor') || source.contains('diploma')) {
+      return _ms ? 'Prasiswazah' : 'Undergraduate';
+    }
+    return null;
+  }
+
   String get realTime =>
       _ms ? 'Tarikh dan masa semasa' : 'Current date and time';
   String get currentRoom => _ms ? 'Bilik Semasa' : 'Current Room';
@@ -1810,13 +2505,16 @@ class _UserText {
   String get editProfileNote => _ms
       ? 'Perubahan memerlukan kelulusan admin dan hanya boleh dibuat sekali sebulan.'
       : 'Changes require admin approval and are limited to once per month.';
-  String get changePassword => _ms ? 'Tukar Kata Laluan' : 'Change Password';
+  String get changePassword => forgotPassword;
+  String get forgotPassword => _ms ? 'Lupa Kata Laluan' : 'Forgot Password';
   String get forgotPasswordNote => _ms
       ? 'Hantar pautan tetapan semula kata laluan ke emel anda.'
       : 'Send a password reset link to your email.';
   String get passwordEmailSent => _ms
       ? 'Berjaya. Emel tetapan semula kata laluan telah disediakan.'
       : 'Success. Password reset email prepared.';
+  String get checkEmail =>
+      _ms ? 'Sila semak emel anda.' : 'Please check your email.';
   String get actionFailed =>
       _ms ? 'Tindakan gagal.' : 'Unable to complete action.';
   String get helpSupport => _ms ? 'Bantuan & Sokongan' : 'Help & Support';

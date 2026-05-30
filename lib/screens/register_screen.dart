@@ -49,7 +49,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final adminRoleSelected = _role.trim().toLowerCase() == 'admin';
     return AppBackground(
       child: Scaffold(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Register'),
           backgroundColor: Colors.transparent,

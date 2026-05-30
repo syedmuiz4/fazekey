@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../widgets/app_background.dart';
-import '../widgets/corporate_chrome.dart';
 import '../widgets/primary_button.dart';
 import 'login_screen.dart';
 
@@ -10,41 +10,64 @@ class WelcomeScreen extends StatelessWidget {
   static const route = '/welcome';
   @override
   Widget build(BuildContext context) {
+    final logoHeight = (MediaQuery.sizeOf(context).height * .30)
+        .clamp(220.0, 320.0)
+        .toDouble();
     return AppBackground(
       child: Scaffold(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppBackground.slateGray,
         body: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Spacer(),
-                Image.asset(
-                  'assets/images/logo2.png',
-                  width: 220,
-                  fit: BoxFit.contain,
-                  filterQuality: FilterQuality.high,
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  'Campus Access',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                    color: CorporateColors.text,
-                    fontWeight: FontWeight.w900,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    'FAZEKEY',
+                    style:
+                        GoogleFonts.orbitron(
+                          fontSize: 120,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -5,
+                          height: .85,
+                        ).copyWith(
+                          color: const Color(0xFF00E5FF),
+                          shadows: [
+                            Shadow(
+                              color: const Color(
+                                0xFF00E5FF,
+                              ).withValues(alpha: .72),
+                              blurRadius: 25,
+                            ),
+                          ],
+                        ),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'A smart campus access control console for secure entry.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: CorporateColors.mutedText,
-                    fontWeight: FontWeight.w600,
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Image.asset(
+                        'assets/images/logo3_.png',
+                        height: logoHeight,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                      ),
+                      const SizedBox(height: 28),
+                      Text(
+                        'Secure identity verification and room access management for FSKTM facilities.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const Spacer(),
                 PrimaryButton(
                   label: 'Get Started',
                   onPressed: () =>
