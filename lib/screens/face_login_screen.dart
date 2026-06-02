@@ -20,6 +20,7 @@ import '../providers/face_provider.dart';
 import '../providers/log_provider.dart';
 import '../providers/system_provider.dart';
 import '../services/firebase_service.dart';
+import '../widgets/app_background.dart';
 import '../widgets/corporate_chrome.dart';
 import '../widgets/face_overlay.dart';
 import 'access_result_screen.dart';
@@ -766,7 +767,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         if (!didPop) unawaited(_popAfterCameraRelease());
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AppBackground.slateGray,
         body: SafeArea(
           child: Builder(
             builder: (context) {

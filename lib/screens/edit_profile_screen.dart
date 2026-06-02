@@ -104,7 +104,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Edit Profile'),
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
         ),
         body: StreamBuilder<AppUser?>(
           stream: auth.watchActiveUserProfile(),

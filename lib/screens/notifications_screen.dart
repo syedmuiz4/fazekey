@@ -44,7 +44,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Recent Alerts'),
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
         ),
         body: StreamBuilder<List<RoomAccessRequest>>(
           stream: context.read<FirebaseService>().watchRoomAccessRequests(),

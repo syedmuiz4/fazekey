@@ -53,7 +53,7 @@ class _AddAreaScreenState extends State<AddAreaScreen> {
         backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Add Rooms'),
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
           actions: [
             IconButton(
               tooltip: 'Add another room',

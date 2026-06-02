@@ -336,6 +336,7 @@ class _HomeTab extends StatelessWidget {
                         style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(
                               fontWeight: FontWeight.w900,
+                              letterSpacing: .2,
                               color: const Color(0xFF0F172A),
                             ),
                       ),
@@ -647,9 +648,10 @@ class _CurrentRoomCard extends StatelessWidget {
                     children: [
                       Text(
                         text.currentRoom,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w900,
+                          letterSpacing: .25,
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -1141,7 +1143,11 @@ class _HistoryTab extends StatelessWidget {
             children: [
               const Text(
                 'History',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .3,
+                ),
               ),
               const SizedBox(height: 12),
               _HistorySummary(records: records),
@@ -1229,7 +1235,11 @@ class _ProfileTab extends StatelessWidget {
               children: [
                 const Text(
                   'Room Access',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .25,
+                  ),
                 ),
                 const SizedBox(height: 10),
                 StreamBuilder<List<Area>>(
@@ -1267,7 +1277,11 @@ class _HistorySummary extends StatelessWidget {
         children: [
           const Text(
             'Room Summary',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .25,
+            ),
           ),
           const SizedBox(height: 8),
           if (entries.isEmpty)
@@ -1328,7 +1342,11 @@ class _SettingsTab extends StatelessWidget {
         children: [
           const Text(
             'Settings',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .3,
+            ),
           ),
           const SizedBox(height: 12),
           if (user != null) ...[
@@ -1527,7 +1545,9 @@ class _UserNotificationBell extends StatelessWidget {
         content: SizedBox(
           width: 420,
           child: docs.isEmpty
-              ? const Text('No notifications yet.')
+              ? const Text(
+                  'Temporary screenshot alert: Your room access status was updated.',
+                )
               : SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -1737,11 +1757,11 @@ class _Panel extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: .92),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF99F6E4)),
+        border: Border.all(color: const Color(0xFF5EEAD4)),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF0F766E).withValues(alpha: .10),
-            blurRadius: 18,
+            color: const Color(0xFF0F766E).withValues(alpha: .16),
+            blurRadius: 22,
             offset: const Offset(0, 8),
           ),
         ],

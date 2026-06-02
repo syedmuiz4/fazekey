@@ -25,7 +25,6 @@ import '../widgets/corporate_chrome.dart';
 import '../widgets/glass_card.dart';
 import 'add_area_screen.dart';
 import 'face_registration_screen.dart';
-import 'notifications_screen.dart';
 import 'user_dashboard_screen.dart';
 import 'welcome_screen.dart';
 
@@ -130,7 +129,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             colorScheme: darkScheme,
             scaffoldBackgroundColor: const Color(0xFF0F172A),
             appBarTheme: baseTheme.appBarTheme.copyWith(
-              backgroundColor: Colors.transparent,
+              backgroundColor: AppBackground.slateGray,
               foregroundColor: Colors.white,
             ),
             switchTheme: SwitchThemeData(
@@ -168,15 +167,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Theme(
         data: adminTheme,
         child: ColoredBox(
-          color: _darkMode
-              ? const Color(0xFF0F172A)
-              : CorporateColors.background,
+          color: _darkMode ? const Color(0xFF0F172A) : AppBackground.slateGray,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final wide = constraints.maxWidth >= 900;
               return Scaffold(
                 key: _dashboardScaffoldKey,
-                backgroundColor: Colors.transparent,
+                backgroundColor: _darkMode
+                    ? Colors.transparent
+                    : AppBackground.slateGray,
                 drawer: wide
                     ? null
                     : Drawer(
@@ -189,7 +188,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                       ),
                 appBar: AppBar(
-                  backgroundColor: Colors.transparent,
+                  backgroundColor: _darkMode
+                      ? Colors.transparent
+                      : AppBackground.slateGray,
                   leading: page == _DashboardPage.timeline
                       ? IconButton(
                           tooltip: 'Back',
@@ -214,13 +215,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             icon: const Icon(Icons.menu_rounded),
                           ),
                         ),
-                  title: Text(_pageTitle(page, text)),
+                  title: Text(
+                    _pageTitle(page, text),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .35,
+                    ),
+                  ),
                   actions: [
                     _NotificationBell(
-                      onTap: () => Navigator.pushNamed(
-                        context,
-                        NotificationsScreen.route,
-                      ),
+                      onTap: () => _showAdminNotification(context),
                     ),
                     if (page == _DashboardPage.timeline ||
                         page == _DashboardPage.settings)
@@ -352,6 +356,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return text.settings;
     }
   }
+
+  Future<void> _showAdminNotification(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Notifications'),
+        content: const SizedBox(
+          width: 420,
+          child: Text(
+            'Temporary screenshot alert: Room access request received.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _NotificationBell extends StatelessWidget {
@@ -444,7 +469,10 @@ class _CommandSideMenu extends StatelessWidget {
                         children: [
                           const Text(
                             'FAZEKEY',
-                            style: TextStyle(fontWeight: FontWeight.w900),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: .3,
+                            ),
                           ),
                           Text(
                             user?.name.trim().isNotEmpty == true
@@ -623,9 +651,9 @@ class _FixedDashboardMetricCard extends StatelessWidget {
       onTap: onTap,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: CorporateColors.surface,
+          color: Colors.white.withValues(alpha: .96),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: CorporateColors.border),
+          border: Border.all(color: const Color(0xFF99F6E4)),
           boxShadow: [
             BoxShadow(
               color: CorporateColors.lightBlue.withValues(alpha: .22),
@@ -652,8 +680,9 @@ class _FixedDashboardMetricCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: CorporateColors.mutedText,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w900,
                         fontSize: 12,
+                        letterSpacing: .2,
                       ),
                     ),
                   ),
@@ -690,9 +719,9 @@ class _RoomStatusPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: CorporateColors.surface,
+        color: Colors.white.withValues(alpha: .96),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: CorporateColors.border),
+        border: Border.all(color: const Color(0xFF99F6E4)),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -708,7 +737,10 @@ class _RoomStatusPanel extends StatelessWidget {
                 children: [
                   const Text(
                     'Room Status',
-                    style: TextStyle(fontWeight: FontWeight.w900),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .25,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   StreamBuilder<int>(
@@ -753,9 +785,9 @@ class _RecentAccessLogsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: CorporateColors.surface,
+        color: Colors.white.withValues(alpha: .96),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: CorporateColors.border),
+        border: Border.all(color: const Color(0xFF99F6E4)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -768,7 +800,10 @@ class _RecentAccessLogsPanel extends StatelessWidget {
                 const Expanded(
                   child: Text(
                     'Recent Access Logs',
-                    style: TextStyle(fontWeight: FontWeight.w900),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .25,
+                    ),
                   ),
                 ),
                 TextButton(onPressed: onHistory, child: const Text('History')),
@@ -3858,15 +3893,6 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        Text(
-          'ACCESS LOG',
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0,
-            color: CorporateColors.text,
-          ),
-        ),
-        const SizedBox(height: 14),
         _AccessLogPanel(
           child: Wrap(
             spacing: 12,
@@ -4447,7 +4473,7 @@ class _UserDeepDetailPage extends StatelessWidget {
       child: Scaffold(
         backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
           title: const Text('View Full Profile'),
         ),
         body: StreamBuilder<List<AccessLog>>(
@@ -4569,15 +4595,6 @@ class _SettingsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        Text(
-          'SETTINGS',
-          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0,
-            color: CorporateColors.text,
-          ),
-        ),
-        const SizedBox(height: 14),
         _SettingsPanel(
           title: text.myAccount,
           child: Column(

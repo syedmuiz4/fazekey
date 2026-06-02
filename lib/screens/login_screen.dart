@@ -93,7 +93,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             const SizedBox(height: 34),
                             SizedBox(
                               height: 56,
-                              child: FilledButton.icon(
+                              child: FilledButton(
                                 style: FilledButton.styleFrom(
                                   backgroundColor: CorporateColors.teal,
                                   foregroundColor: Colors.white,
@@ -101,16 +101,13 @@ class _LoginScreenState extends State<LoginScreen> {
                                     borderRadius: BorderRadius.circular(25),
                                   ),
                                 ),
-                                icon: const Icon(
-                                  Icons.face_retouching_natural_rounded,
-                                ),
-                                label: const Text(
-                                  'Login with Face',
-                                  style: TextStyle(fontWeight: FontWeight.w900),
-                                ),
                                 onPressed: () => Navigator.of(
                                   context,
                                 ).pushNamed(FaceLoginScreen.route),
+                                child: const Text(
+                                  'Login with Face',
+                                  style: TextStyle(fontWeight: FontWeight.w900),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 24),

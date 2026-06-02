@@ -52,7 +52,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         backgroundColor: AppBackground.slateGray,
         appBar: AppBar(
           title: const Text('Register'),
-          backgroundColor: Colors.transparent,
+          backgroundColor: AppBackground.slateGray,
         ),
         body: SafeArea(
           child: ListView(

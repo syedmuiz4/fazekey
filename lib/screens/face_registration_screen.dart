@@ -11,6 +11,7 @@ import '../models/app_user.dart';
 import '../providers/alert_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/face_provider.dart';
+import '../widgets/app_background.dart';
 import '../widgets/face_overlay.dart';
 import '../widgets/primary_button.dart';
 import 'access_result_screen.dart';
@@ -196,13 +197,13 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
     final selectedUser = args is FaceRegistrationArgs ? args.user : null;
     if (selectedUser != null && auth.loading && auth.user == null) {
       return const Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AppBackground.slateGray,
         body: SafeArea(child: Center(child: CircularProgressIndicator())),
       );
     }
     if (selectedUser != null && !auth.isAdmin) {
       return const Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: AppBackground.slateGray,
         body: SafeArea(
           child: Center(
             child: Text(
@@ -215,7 +216,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
     }
     final user = selectedUser ?? auth.user;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: AppBackground.slateGray,
       body: SafeArea(
         child: Stack(
           children: [

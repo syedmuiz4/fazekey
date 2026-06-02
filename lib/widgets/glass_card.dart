@@ -19,10 +19,10 @@ class GlassCard extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final surface = dark
         ? Theme.of(context).colorScheme.surfaceContainerHighest
-        : CorporateColors.surface;
+        : Colors.white.withValues(alpha: .96);
     final border = dark
         ? Theme.of(context).colorScheme.outlineVariant
-        : CorporateColors.border;
+        : const Color(0xFF99F6E4).withValues(alpha: .88);
     final shadow = dark
         ? Colors.black.withValues(alpha: .18)
         : CorporateColors.lightBlue.withValues(alpha: .22);
