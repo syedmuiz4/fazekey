@@ -396,20 +396,14 @@ class _RoomRequestCard extends StatelessWidget {
             children: [
               Expanded(
                 child: FilledButton(
-                  onPressed: () => firebase.decideRoomAccessRequest(
-                    request: request,
-                    allowed: true,
-                  ),
+                  onPressed: () => _decide(context, firebase, true),
                   child: const Text('Allow'),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () => firebase.decideRoomAccessRequest(
-                    request: request,
-                    allowed: false,
-                  ),
+                  onPressed: () => _decide(context, firebase, false),
                   child: const Text('Deny'),
                 ),
               ),
@@ -418,6 +412,31 @@ class _RoomRequestCard extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _decide(
+    BuildContext context,
+    FirebaseService firebase,
+    bool allowed,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await firebase.decideRoomAccessRequest(
+        request: request,
+        allowed: allowed,
+      );
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            allowed
+                ? '${request.userName} is now checked in to ${request.areaName}.'
+                : 'Room request denied.',
+          ),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
   }
 }
 

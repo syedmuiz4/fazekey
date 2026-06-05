@@ -30,6 +30,8 @@ class AppUser {
     this.requiresPasswordChange = false,
     this.temporaryPasswordIssuedAt,
     this.temporaryPasswordExpiresAt,
+    this.accessValidFrom,
+    this.accessValidUntil,
   });
 
   final String id;
@@ -58,6 +60,8 @@ class AppUser {
   final bool requiresPasswordChange;
   final DateTime? temporaryPasswordIssuedAt;
   final DateTime? temporaryPasswordExpiresAt;
+  final DateTime? accessValidFrom;
+  final DateTime? accessValidUntil;
 
   bool get isAdmin => role.trim().toLowerCase() == 'admin';
   bool get isApproved => status.trim().toLowerCase() == 'approved';
@@ -198,6 +202,8 @@ class AppUser {
           (map['temporaryPasswordIssuedAt'] as Timestamp?)?.toDate(),
       temporaryPasswordExpiresAt:
           (map['temporaryPasswordExpiresAt'] as Timestamp?)?.toDate(),
+      accessValidFrom: (map['accessValidFrom'] as Timestamp?)?.toDate(),
+      accessValidUntil: (map['accessValidUntil'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -254,6 +260,10 @@ class AppUser {
       'temporaryPasswordExpiresAt': Timestamp.fromDate(
         temporaryPasswordExpiresAt!,
       ),
+    if (accessValidFrom != null)
+      'accessValidFrom': Timestamp.fromDate(accessValidFrom!),
+    if (accessValidUntil != null)
+      'accessValidUntil': Timestamp.fromDate(accessValidUntil!),
   };
 
   AppUser copyWith({
@@ -281,6 +291,8 @@ class AppUser {
     bool? requiresPasswordChange,
     DateTime? temporaryPasswordIssuedAt,
     DateTime? temporaryPasswordExpiresAt,
+    DateTime? accessValidFrom,
+    DateTime? accessValidUntil,
   }) => AppUser(
     id: id,
     name: name ?? this.name,
@@ -312,5 +324,7 @@ class AppUser {
         temporaryPasswordIssuedAt ?? this.temporaryPasswordIssuedAt,
     temporaryPasswordExpiresAt:
         temporaryPasswordExpiresAt ?? this.temporaryPasswordExpiresAt,
+    accessValidFrom: accessValidFrom ?? this.accessValidFrom,
+    accessValidUntil: accessValidUntil ?? this.accessValidUntil,
   );
 }

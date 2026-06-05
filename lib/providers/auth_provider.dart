@@ -315,7 +315,9 @@ class AuthProvider extends ChangeNotifier {
         left.photoUpdatedAt == right.photoUpdatedAt &&
         left.requiresPasswordChange == right.requiresPasswordChange &&
         left.temporaryPasswordIssuedAt == right.temporaryPasswordIssuedAt &&
-        left.temporaryPasswordExpiresAt == right.temporaryPasswordExpiresAt;
+        left.temporaryPasswordExpiresAt == right.temporaryPasswordExpiresAt &&
+        left.accessValidFrom == right.accessValidFrom &&
+        left.accessValidUntil == right.accessValidUntil;
   }
 
   bool _sameStringList(List<String> left, List<String> right) {

@@ -25,6 +25,7 @@ import '../widgets/corporate_chrome.dart';
 import '../widgets/glass_card.dart';
 import 'add_area_screen.dart';
 import 'face_registration_screen.dart';
+import 'notifications_screen.dart';
 import 'user_dashboard_screen.dart';
 import 'welcome_screen.dart';
 
@@ -224,7 +225,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   actions: [
                     _NotificationBell(
-                      onTap: () => _showAdminNotification(context),
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        NotificationsScreen.route,
+                      ),
                     ),
                     if (page == _DashboardPage.timeline ||
                         page == _DashboardPage.settings)
@@ -355,27 +359,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       case _DashboardPage.settings:
         return text.settings;
     }
-  }
-
-  Future<void> _showAdminNotification(BuildContext context) async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Notifications'),
-        content: const SizedBox(
-          width: 420,
-          child: Text(
-            'Temporary screenshot alert: Room access request received.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
   }
 }
 
@@ -1567,6 +1550,8 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
         room: _selectedRooms.first,
         rooms: _selectedRooms,
         accessLevel: _accessLevel,
+        accessValidFrom: _startAt,
+        accessValidUntil: _endAt,
       );
       if (!mounted) return;
       setState(() {
@@ -1668,15 +1653,13 @@ class _CredentialConfirmationPanel extends StatelessWidget {
             FilledButton.icon(
               onPressed: () async {
                 try {
-                  await context.read<FirebaseService>().sendSetupEmail(
-                    user.email,
-                    user: user,
-                    temporaryPassword: temporaryPassword,
-                  );
+                  await context
+                      .read<FirebaseService>()
+                      .sendTemporaryPasswordSetupEmail(user);
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Temporary password email is ready.'),
+                      content: Text('Temporary password email sent.'),
                     ),
                   );
                 } catch (e) {

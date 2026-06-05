@@ -326,7 +326,7 @@ class FirebaseService {
       faculty: 'FSKTM',
       currentSemester: 'Semester 1',
       accessLevel: adminRole ? 3 : accessLevel.clamp(0, 3).toInt(),
-      status: adminRole ? 'approved' : 'pending',
+      status: 'approved',
       createdAt: DateTime.now(),
       hasFace: false,
     );
@@ -778,6 +778,8 @@ class FirebaseService {
     required String room,
     required int accessLevel,
     List<String>? rooms,
+    DateTime? accessValidFrom,
+    DateTime? accessValidUntil,
   }) {
     final assignedRooms = _normalizedRooms([...?rooms, room]);
     return userRef(userId).set({
@@ -786,6 +788,10 @@ class FirebaseService {
       'permittedZones': assignedRooms,
       'accessLevel': accessLevel.clamp(0, 3),
       'status': 'approved',
+      if (accessValidFrom != null)
+        'accessValidFrom': Timestamp.fromDate(accessValidFrom),
+      if (accessValidUntil != null)
+        'accessValidUntil': Timestamp.fromDate(accessValidUntil),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
@@ -1241,12 +1247,41 @@ class FirebaseService {
         );
   }
 
+  Stream<List<RoomAccessRecord>> watchUserRoomAccessRecords(
+    String userId, {
+    int limit = 200,
+  }) {
+    final id = userId.trim();
+    if (id.isEmpty) return Stream.value(const <RoomAccessRecord>[]);
+    return roomAccessRecordsRef
+        .where('userId', isEqualTo: id)
+        .limit(limit)
+        .snapshots()
+        .map(
+          (snap) =>
+              snap.docs
+                  .map((doc) => RoomAccessRecord.fromMap(doc.id, doc.data()))
+                  .toList()
+                ..sort((a, b) => b.timestamp.compareTo(a.timestamp)),
+        );
+  }
+
   Stream<List<RoomAccessRecord>> watchActiveRoomSessions() {
     return activeRoomSessionsRef.snapshots().map(
       (snap) => snap.docs
           .map((doc) => RoomAccessRecord.fromMap(doc.id, doc.data()))
           .toList(),
     );
+  }
+
+  Stream<RoomAccessRecord?> watchActiveRoomSession(String userId) {
+    final id = userId.trim();
+    if (id.isEmpty) return Stream.value(null);
+    return activeRoomSessionsRef.doc(id).snapshots().map((snap) {
+      final data = snap.data();
+      if (!snap.exists || data == null) return null;
+      return RoomAccessRecord.fromMap(snap.id, data);
+    });
   }
 
   Future<RoomAccessRecord?> getActiveRoomSession(String userId) async {

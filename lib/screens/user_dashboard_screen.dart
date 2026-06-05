@@ -632,15 +632,10 @@ class _CurrentRoomCard extends StatelessWidget {
           stream: firebase.watchAreas(),
           builder: (context, areaSnapshot) {
             final areas = areaSnapshot.data ?? const <Area>[];
-            return StreamBuilder<List<RoomAccessRecord>>(
-              stream: firebase.watchActiveRoomSessions(),
+            return StreamBuilder<RoomAccessRecord?>(
+              stream: firebase.watchActiveRoomSession(currentUser.id),
               builder: (context, snapshot) {
-                final activeSessions =
-                    snapshot.data ?? const <RoomAccessRecord>[];
-                final record = _activeSessionForUser(
-                  activeSessions,
-                  currentUser.id,
-                );
+                final record = snapshot.data;
                 final accessRoom = record?.areaName;
                 return _Panel(
                   child: Column(
@@ -701,7 +696,6 @@ class _CurrentRoomCard extends StatelessWidget {
                       _RoomCapacityList(
                         rooms: _visibleRooms(currentUser, grants),
                         areas: areas,
-                        activeSessions: activeSessions,
                       ),
                       if (record != null) ...[
                         const SizedBox(height: 12),
@@ -976,15 +970,10 @@ class _InlineInfo extends StatelessWidget {
 }
 
 class _RoomCapacityList extends StatelessWidget {
-  const _RoomCapacityList({
-    required this.rooms,
-    required this.areas,
-    required this.activeSessions,
-  });
+  const _RoomCapacityList({required this.rooms, required this.areas});
 
   final List<String> rooms;
   final List<Area> areas;
-  final List<RoomAccessRecord> activeSessions;
 
   @override
   Widget build(BuildContext context) {
@@ -994,11 +983,7 @@ class _RoomCapacityList extends StatelessWidget {
         for (final room in rooms.take(4))
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: _RoomCapacityRow(
-              room: room,
-              area: _matchingArea(room),
-              activeSessions: activeSessions,
-            ),
+            child: _RoomCapacityRow(room: room, area: _matchingArea(room)),
           ),
       ],
     );
@@ -1016,25 +1001,16 @@ class _RoomCapacityList extends StatelessWidget {
 }
 
 class _RoomCapacityRow extends StatelessWidget {
-  const _RoomCapacityRow({
-    required this.room,
-    required this.area,
-    required this.activeSessions,
-  });
+  const _RoomCapacityRow({required this.room, required this.area});
 
   final String room;
   final Area? area;
-  final List<RoomAccessRecord> activeSessions;
 
   @override
   Widget build(BuildContext context) {
     final currentArea = area;
     final capacity = currentArea?.capacity ?? 0;
-    final occupied = currentArea == null
-        ? 0
-        : activeSessions
-              .where((session) => _sessionBelongsToArea(session, currentArea))
-              .length;
+    final occupied = currentArea?.currentOccupancy ?? 0;
     final label = capacity <= 0
         ? 'Capacity available'
         : '$occupied / $capacity occupied';
@@ -1070,24 +1046,6 @@ class _RoomCapacityRow extends StatelessWidget {
       ),
     );
   }
-}
-
-RoomAccessRecord? _activeSessionForUser(
-  List<RoomAccessRecord> sessions,
-  String userId,
-) {
-  for (final session in sessions) {
-    if (session.userId == userId) return session;
-  }
-  return null;
-}
-
-bool _sessionBelongsToArea(RoomAccessRecord session, Area area) {
-  if (session.areaId.trim().isNotEmpty && session.areaId == area.id) {
-    return true;
-  }
-  final key = _accessKey(session.areaName);
-  return _areaRoomKeys(area).contains(key);
 }
 
 DateTime? _latestGrantExpiry(List<AccessGrant> grants) {
@@ -1131,13 +1089,9 @@ class _HistoryTab extends StatelessWidget {
     return SafeArea(
       bottom: false,
       child: StreamBuilder<List<RoomAccessRecord>>(
-        stream: firebase.watchRoomAccessRecords(limit: 200),
+        stream: firebase.watchUserRoomAccessRecords(currentUser.id, limit: 200),
         builder: (context, snapshot) {
-          final records =
-              (snapshot.data ?? const <RoomAccessRecord>[])
-                  .where((record) => record.userId == currentUser.id)
-                  .toList()
-                ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+          final records = snapshot.data ?? const <RoomAccessRecord>[];
           return ListView(
             padding: const EdgeInsets.all(18),
             children: [
@@ -1214,9 +1168,9 @@ class _ProfileTab extends StatelessWidget {
             StreamBuilder<List<AccessGrant>>(
               stream: firebase.watchAccessGrants(userId: user!.id, limit: 80),
               builder: (context, snapshot) {
-                final validUntil = _latestGrantExpiry(
-                  snapshot.data ?? const <AccessGrant>[],
-                );
+                final validUntil =
+                    user!.accessValidUntil ??
+                    _latestGrantExpiry(snapshot.data ?? const <AccessGrant>[]);
                 return _Panel(
                   child: _InlineInfo(
                     label: text.validUntil,
@@ -1545,9 +1499,7 @@ class _UserNotificationBell extends StatelessWidget {
         content: SizedBox(
           width: 420,
           child: docs.isEmpty
-              ? const Text(
-                  'Temporary screenshot alert: Your room access status was updated.',
-                )
+              ? const Text('No notifications yet.')
               : SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -2499,9 +2451,10 @@ class _UserText {
   String get accessReady =>
       _ms ? 'Akses bilik sedia digunakan' : 'Room access ready';
   String get checkedIn => _ms ? 'Daftar masuk' : 'Checked in';
-  String get validUntil => _ms ? 'Sah sehingga' : 'Valid until';
+  String get validUntil =>
+      _ms ? 'Akses fakulti sah sehingga' : 'Faculty access valid until';
   String get noExpiryAvailable =>
-      _ms ? 'Tiada tarikh tamat aktif' : 'No active expiry date';
+      _ms ? 'Tiada tempoh akses fakulti' : 'No faculty access expiry date';
   String get signOutRoom => _ms ? 'Daftar Keluar Bilik' : 'Sign Out of Room';
   String get signedOutRoom =>
       _ms ? 'Telah daftar keluar bilik.' : 'Signed out of room.';

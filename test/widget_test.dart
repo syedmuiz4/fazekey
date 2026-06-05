@@ -508,14 +508,16 @@ void main() {
   test('logo asset is bundled', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
 
-    final data = await rootBundle.load('assets/images/logo2.png');
+    final data = await rootBundle.load('assets/images/logo3_.png');
 
     expect(data.lengthInBytes, greaterThan(0));
   });
 
   testWidgets('logo image renders from asset path', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: Image.asset('assets/images/logo2.png'))),
+      MaterialApp(
+        home: Scaffold(body: Image.asset('assets/images/logo3_.png')),
+      ),
     );
     await tester.pumpAndSettle();
 

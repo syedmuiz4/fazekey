@@ -13,7 +13,7 @@ import '../services/local_database_service.dart';
 class FaceProvider extends ChangeNotifier {
   FaceProvider(this._face, this._firebase);
 
-  static const _verificationThreshold = .95;
+  static const _verificationThreshold = 1.2;
 
   final FaceRecognitionService _face;
   final FirebaseService _firebase;
