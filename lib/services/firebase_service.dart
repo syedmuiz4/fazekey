@@ -565,7 +565,7 @@ class FirebaseService {
       'authUid': authUid,
       'temporaryPasswordIssuedAt': Timestamp.fromDate(issuedAt),
       'temporaryPasswordExpiresAt': Timestamp.fromDate(
-        issuedAt.add(const Duration(hours: 1)),
+        issuedAt.add(const Duration(minutes: 30)),
       ),
       'temporaryPasswordEmailSent': false,
       'requiresPasswordChange': true,
@@ -1110,13 +1110,42 @@ class FirebaseService {
   }
 
   Future<void> recordAppLogin(AppUser user, {String method = 'password'}) {
-    return firestore.collection('appAuthRecords').add({
-      'userId': user.id,
-      'userName': user.name.trim().isEmpty ? user.id : user.name.trim(),
-      'email': user.email.trim(),
-      'event': 'login',
-      'method': method,
-      'timestamp': FieldValue.serverTimestamp(),
+    final userName = user.name.trim().isEmpty ? user.id : user.name.trim();
+    final email = user.email.trim();
+    final authRecordRef = firestore.collection('appAuthRecords').doc();
+    final adminNotificationRef = adminNotificationsRef.doc();
+    final profileRef = userRef(user.id);
+    return firestore.runTransaction((transaction) async {
+      final profileSnap = await transaction.get(profileRef);
+      final data = profileSnap.data();
+      final firstLoginNotified = data?['firstLoginNotificationSentAt'] != null;
+      final temporaryPasswordIssued =
+          data?['temporaryPasswordIssuedAt'] != null ||
+          user.temporaryPasswordIssuedAt != null;
+      final shouldNotifyFirstLogin =
+          !user.isAdmin && temporaryPasswordIssued && !firstLoginNotified;
+      transaction.set(authRecordRef, {
+        'userId': user.id,
+        'userName': userName,
+        'email': email,
+        'event': 'login',
+        'method': method,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+      if (!shouldNotifyFirstLogin) return;
+      transaction.set(profileRef, {
+        'firstLoginNotificationSentAt': FieldValue.serverTimestamp(),
+        'firstLoginMethod': method,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      transaction.set(adminNotificationRef, {
+        'title': 'New user first login',
+        'message': '$userName signed in for the first time using $email.',
+        'type': 'first_login',
+        'relatedId': user.id,
+        'read': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 
@@ -1176,7 +1205,8 @@ class FirebaseService {
     final ref = await roomAccessRequestsRef.add(request.toMap());
     await _notifyAdmins(
       title: 'Room access request',
-      message: '${request.userName} requested access to ${request.areaName}.',
+      message:
+          'User: ${request.userName}\nEmail: ${user.email}\nID: ${user.identityNumber.trim().isEmpty ? user.id : user.identityNumber.trim()}\nRequested room: ${request.areaName}',
       type: 'room',
       relatedId: ref.id,
     );
@@ -1198,12 +1228,10 @@ class FirebaseService {
         : Area.fromMap(areaSnap.id, areaData);
     if (allowed && user != null && area != null) {
       final now = DateTime.now();
-      await grantRoomAccess(
-        user: user,
-        area: area,
-        startAt: now,
-        endAt: now.add(duration),
-      );
+      final endAt = user.accessValidUntil?.isAfter(now) == true
+          ? user.accessValidUntil!
+          : now.add(duration);
+      await grantRoomAccess(user: user, area: area, startAt: now, endAt: endAt);
       await _activateApprovedRoomRequest(
         user: user,
         area: area,
@@ -1272,6 +1300,48 @@ class FirebaseService {
           .map((doc) => RoomAccessRecord.fromMap(doc.id, doc.data()))
           .toList(),
     );
+  }
+
+  Future<void> sendOpenRoomSessionReminders({
+    Duration threshold = const Duration(hours: 4),
+    Duration repeatAfter = const Duration(hours: 1),
+  }) async {
+    final now = DateTime.now();
+    final cutoff = Timestamp.fromDate(now.subtract(threshold));
+    final snap = await activeRoomSessionsRef
+        .where('timestamp', isLessThanOrEqualTo: cutoff)
+        .limit(50)
+        .get();
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final lastReminder = (data['scanOutReminderSentAt'] as Timestamp?)
+          ?.toDate();
+      if (lastReminder != null && now.difference(lastReminder) < repeatAfter) {
+        continue;
+      }
+      final record = RoomAccessRecord.fromMap(doc.id, data);
+      final duration = now.difference(record.timestamp);
+      final hours = duration.inHours;
+      final minutes = duration.inMinutes.remainder(60);
+      final durationText = hours > 0 ? '${hours}h ${minutes}m' : '${minutes}m';
+      await _notifyUser(
+        userId: record.userId,
+        title: 'Scan-out reminder',
+        message:
+            'You are still checked in to ${record.areaName} for $durationText. Please scan out when leaving the room.',
+        type: 'room',
+      );
+      await _notifyAdmins(
+        title: 'Open room session reminder',
+        message:
+            '${record.userName} is still checked in to ${record.areaName} for $durationText.',
+        type: 'room',
+        relatedId: record.userId,
+      );
+      await doc.reference.set({
+        'scanOutReminderSentAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
   }
 
   Stream<RoomAccessRecord?> watchActiveRoomSession(String userId) {
@@ -1451,7 +1521,6 @@ class FirebaseService {
     final batch = firestore.batch();
     batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
     batch.delete(activeRoomSessionsRef.doc(user.id));
-    await _deactivateActiveRoomGrantsForUserInBatch(batch, user.id);
     _clearUserRoomAccessInBatch(batch, userId: user.id);
     if (area.id.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(area.id), {
@@ -1482,7 +1551,6 @@ class FirebaseService {
     final batch = firestore.batch();
     batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
     batch.delete(activeRoomSessionsRef.doc(user.id));
-    await _deactivateActiveRoomGrantsForUserInBatch(batch, user.id);
     _clearUserRoomAccessInBatch(batch, userId: user.id);
     if (active.areaId.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(active.areaId), {
@@ -1644,33 +1712,22 @@ class FirebaseService {
     final displayName = (profile?.name.trim().isNotEmpty == true)
         ? profile!.name.trim()
         : 'FAZEKEY user';
-    final roleLabel = profile?.roleLabel ?? 'User';
-    final rooms = profile?.assignedRooms ?? const <String>[];
-    final roomLine = rooms.isEmpty
-        ? 'Authorized zones: Pending assignment'
-        : 'Authorized zones: ${rooms.join(', ')}';
-    final credentialLines = [
-      'Registered email: $target',
-      'Temporary password: $cleanTemporaryPassword',
-      if (profile?.identityNumber.trim().isNotEmpty == true)
-        'User ID: ${profile!.identityNumber.trim()}',
-      'Role: $roleLabel',
-      roomLine,
-    ].join('\r\n');
+    final settings = await getSystemSettings();
+    final supportEmail = settings.administratorEmail.trim().isEmpty
+        ? 'support@fazekey.local'
+        : settings.administratorEmail.trim();
     final body =
-        'Your Fazekey access is live, $displayName. Use the temporary password below to unlock your first door.\r\n\r\n'
-        'Important: change this password after your first sign-in.\r\n\r\n'
-        '$credentialLines\r\n\r\n'
-        'Next steps:\r\n'
-        '1. Open FAZEKEY and sign in with the registered email and temporary password.\r\n'
-        '2. Complete Face Registration when prompted by the administrator.\r\n'
-        '3. Access is limited to the authorized zones listed above.\r\n\r\n'
-        'If you did not expect this account, contact your FAZEKEY administrator before signing in.\r\n\r\n'
-        'Regards,\r\n'
-        'FAZEKEY Security Operations';
+        'Dear $displayName,\r\n\r\n'
+        'Welcome to FAZEKEY. Your account has been successfully registered. Please use the following credentials for your initial login:\r\n\r\n'
+        'Email: $target\r\n\r\n'
+        'Temporary Password: $cleanTemporaryPassword\r\n\r\n'
+        'Note: For security purposes, this password will expire in 24 hours. Upon logging in, you will be required to create a new, secure password and set up your biometric profile.\r\n\r\n'
+        'If you require assistance, please contact us at $supportEmail.\r\n\r\n'
+        'Best regards,\r\n\r\n'
+        'The FAZEKEY Security Team.';
     final opened = await _launchMailto(
       target,
-      subject: 'FAZEKEY Security Portal Credentials',
+      subject: 'FAZEKEY Account Registration: Temporary Password',
       body: body,
     );
     if (!opened) throw Exception('Unable to open a local email application.');
@@ -1680,7 +1737,7 @@ class FirebaseService {
         'requiresPasswordChange': true,
         'temporaryPasswordIssuedAt': Timestamp.fromDate(issuedAt),
         'temporaryPasswordExpiresAt': Timestamp.fromDate(
-          issuedAt.add(const Duration(hours: 1)),
+          issuedAt.add(const Duration(minutes: 30)),
         ),
         'temporaryPasswordEmailSent': true,
         'temporaryPasswordEmailSentAt': FieldValue.serverTimestamp(),

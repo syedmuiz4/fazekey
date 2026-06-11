@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:provider/provider.dart';
 
 import '../models/access_log.dart';
 import '../models/app_user.dart';
+import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import '../widgets/glass_card.dart';
 import '../widgets/primary_button.dart';
@@ -26,9 +28,15 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
         {};
     final user = args['user'] as AppUser?;
     final log = args['log'] as AccessLog?;
-    final granted = log?.granted == true || user != null;
+    final waitingApproval = args['waitingApproval'] == true;
+    final requestedRoom = (args['requestedRoom'] ?? '').toString();
+    final granted = !waitingApproval && (log?.granted == true || user != null);
     final locked = log?.status == 'locked';
-    final accent = granted ? const Color(0xFF16A34A) : const Color(0xFFDC2626);
+    final accent = waitingApproval
+        ? const Color(0xFFF59E0B)
+        : granted
+        ? const Color(0xFF16A34A)
+        : const Color(0xFFDC2626);
     final dashboardRoute =
         args['dashboardRoute'] as String? ??
         (user?.isAdmin == true
@@ -63,6 +71,8 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
                       child: Icon(
                         granted
                             ? Icons.verified_user_rounded
+                            : waitingApproval
+                            ? Icons.hourglass_top_rounded
                             : Icons.cancel_rounded,
                         color: accent,
                         size: 72,
@@ -73,6 +83,8 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
                   Text(
                     granted
                         ? 'Verified'
+                        : waitingApproval
+                        ? 'Waiting for Approval'
                         : locked
                         ? 'Locked'
                         : 'Denied',
@@ -86,7 +98,9 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (granted && user != null)
+                        if (waitingApproval)
+                          _WaitingDetails(user: user, room: requestedRoom)
+                        else if (granted && user != null)
                           _VerifiedDetails(user: user, log: log)
                         else
                           _DeniedDetails(
@@ -97,9 +111,15 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
                   ),
                   const Spacer(),
                   PrimaryButton(
-                    label: granted ? 'Dashboard' : 'Scan Face Again',
+                    label: granted
+                        ? 'Dashboard'
+                        : waitingApproval
+                        ? 'Back to Login'
+                        : 'Scan Face Again',
                     icon: granted
                         ? Icons.dashboard_rounded
+                        : waitingApproval
+                        ? Icons.login_rounded
                         : Icons.face_retouching_natural_rounded,
                     onPressed: () => _replaceAfterFrame(
                       context,
@@ -109,10 +129,12 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
                   TextButton(
                     onPressed: () => _replaceAfterFrame(
                       context,
-                      granted ? backRoute : dashboardRoute,
+                      granted || waitingApproval ? backRoute : dashboardRoute,
                     ),
                     child: Text(
-                      granted ? 'Back' : 'Request Administrator Assistance',
+                      granted || waitingApproval
+                          ? 'Back'
+                          : 'Request Administrator Assistance',
                       style: const TextStyle(color: Colors.white),
                     ),
                   ),
@@ -130,6 +152,72 @@ class _AccessResultScreenState extends State<AccessResultScreen> {
       if (!context.mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil(route, (_) => false);
     });
+  }
+}
+
+class _WaitingDetails extends StatelessWidget {
+  const _WaitingDetails({required this.user, required this.room});
+
+  final AppUser? user;
+  final String room;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = user?.name.trim().isNotEmpty == true
+        ? user!.name.trim()
+        : 'Verified user';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Center(
+          child: Text(
+            displayName,
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _ResultLine(label: 'Status', value: 'Waiting for admin approval'),
+        _ResultLine(label: 'Requested Room', value: _valueOrUnavailable(room)),
+        const SizedBox(height: 12),
+        const Text(
+          'Your face was verified. Admin must approve this first room entry before the dashboard opens.',
+          style: TextStyle(
+            color: Color(0xFF475569),
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        if (user != null) ...[
+          const SizedBox(height: 12),
+          StreamBuilder(
+            stream: context.read<FirebaseService>().watchActiveRoomSession(
+              user!.id,
+            ),
+            builder: (context, snapshot) {
+              if (snapshot.data != null) {
+                SchedulerBinding.instance.addPostFrameCallback((_) {
+                  if (!context.mounted) return;
+                  Navigator.of(context).pushNamedAndRemoveUntil(
+                    UserDashboardScreen.route,
+                    (_) => false,
+                  );
+                });
+                return const Text(
+                  'Approved. Opening your dashboard...',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                );
+              }
+              return const Text(
+                'Waiting for admin approval...',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              );
+            },
+          ),
+        ],
+      ],
+    );
   }
 }
 

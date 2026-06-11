@@ -241,7 +241,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           _hasExplicitTemporalPolicy(system) &&
           system.shouldDenyScanAt(DateTime.now());
       final registeredForScanner =
-          user != null && user.isRegisteredForArea(scanArea);
+          user != null &&
+          (user.isRegisteredForArea(scanArea) ||
+              grantEvaluation?.granted == true);
       final areaAllowed =
           user != null &&
           verifiedArea != null &&
@@ -303,6 +305,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       if (!hasAccess &&
           user != null &&
           adminApproved &&
+          faceRegistered &&
           temporalAllowed &&
           lockReason.isEmpty) {
         await firebase.createRoomAccessRequest(
@@ -319,6 +322,19 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
             ),
           );
         }
+        authProvider.completeFaceLogin(user);
+        unawaited(
+          firebase
+              .recordAppLogin(user, method: 'face_biometric_pending_room')
+              .catchError((_) {}),
+        );
+        if (!mounted) return;
+        _replaceWithAccessResult(
+          user: user,
+          log: log,
+          extraArgs: {'waitingApproval': true, 'requestedRoom': scanRoomName},
+        );
+        return;
       }
       if (hasAccess) {
         final verifiedUser = user!;
@@ -635,7 +651,11 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     _imageStreamSubscription = null;
   }
 
-  void _replaceWithAccessResult({required Object? user, required Object? log}) {
+  void _replaceWithAccessResult({
+    required Object? user,
+    required Object? log,
+    Map<String, dynamic> extraArgs = const {},
+  }) {
     if (isNavigating) return;
     isNavigating = true;
     final verifiedUser = user is AppUser ? user : null;
@@ -648,6 +668,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         arguments: {
           'user': user,
           'log': log,
+          ...extraArgs,
           'dashboardRoute': dashboardUser == null
               ? LoginScreen.route
               : dashboardUser.isAdmin

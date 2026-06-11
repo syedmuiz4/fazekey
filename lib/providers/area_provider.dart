@@ -98,11 +98,11 @@ class AreaProvider extends ChangeNotifier {
     final byId = {for (final area in firestoreAreas) area.id: area};
     final commandRooms = commandCenterAreas.entries.map((entry) {
       final area = byId[entry.key] ?? entry.value;
-      return area.copyWith(active: true, location: 'FSKTM');
+      return area.copyWith(location: 'FSKTM');
     }).toList();
     final extras = firestoreAreas
         .where((area) => !commandCenterAreas.containsKey(area.id))
-        .map((area) => area.copyWith(active: true, location: 'FSKTM'));
+        .map((area) => area.copyWith(location: 'FSKTM'));
     return [...commandRooms, ...extras];
   }
 }

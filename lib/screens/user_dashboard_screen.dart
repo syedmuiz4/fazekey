@@ -754,72 +754,13 @@ class _HomeRoomActionButton extends StatelessWidget {
   Future<void> _showRoomActionDialog(BuildContext context) async {
     final currentUser = user;
     if (currentUser == null) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  text.roomActionTitle,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.exit_to_app_rounded),
-                  title: Text(
-                    text.exitRoom,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  subtitle: Text(text.exitRoomNote),
-                  onTap: () async {
-                    final auth = context.read<AuthProvider>();
-                    Navigator.pop(sheetContext);
-                    await firebase.closeActiveRoomSessionForUser(currentUser);
-                    final ok = await auth.logout();
-                    if (!context.mounted || !ok) return;
-                    Navigator.of(context).pushNamedAndRemoveUntil(
-                      WelcomeScreen.route,
-                      (_) => false,
-                    );
-                  },
-                ),
-                const Divider(height: 16),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.meeting_room_rounded),
-                  title: Text(
-                    text.enterNewRoom,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  subtitle: Text(text.enterNewRoomNote),
-                  onTap: () {
-                    Navigator.pop(sheetContext);
-                    showDialog<void>(
-                      context: context,
-                      builder: (_) => _NewRoomRequestDialog(
-                        user: currentUser,
-                        firebase: firebase,
-                        text: text,
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+    final auth = context.read<AuthProvider>();
+    await firebase.closeActiveRoomSessionForUser(currentUser);
+    final ok = await auth.logout();
+    if (!context.mounted || !ok) return;
+    Navigator.of(
+      context,
+    ).pushNamedAndRemoveUntil(WelcomeScreen.route, (_) => false);
   }
 }
 
@@ -1049,9 +990,8 @@ class _RoomCapacityRow extends StatelessWidget {
 }
 
 DateTime? _latestGrantExpiry(List<AccessGrant> grants) {
-  final active = grants.where((grant) => grant.active).toList()
-    ..sort((a, b) => b.endAt.compareTo(a.endAt));
-  return active.isEmpty ? null : active.first.endAt;
+  final dated = grants.toList()..sort((a, b) => b.endAt.compareTo(a.endAt));
+  return dated.isEmpty ? null : dated.first.endAt;
 }
 
 List<String> _visibleRooms(AppUser user, List<AccessGrant> grants) {

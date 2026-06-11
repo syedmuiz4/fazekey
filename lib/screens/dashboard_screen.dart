@@ -13,6 +13,7 @@ import '../models/access_grant.dart';
 import '../models/access_log.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
+import '../models/room_access_record.dart';
 import '../providers/alert_provider.dart';
 import '../providers/area_provider.dart';
 import '../providers/auth_provider.dart';
@@ -95,6 +96,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final logs = context.read<LogProvider>();
       logs.listen();
       unawaited(logs.syncPending());
+      unawaited(
+        context
+            .read<FirebaseService>()
+            .sendOpenRoomSessionReminders()
+            .catchError((_) {}),
+      );
     });
   }
 
@@ -1053,7 +1060,6 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
   }
 
   void _openEditPanel(BuildContext context, AppUser user, List<Area> areas) {
-    final firebase = context.read<FirebaseService>();
     final messenger = ScaffoldMessenger.of(context);
     showModalBottomSheet<void>(
       context: context,
@@ -1074,7 +1080,7 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
         },
         onSendTemporaryPassword: () {
           Navigator.pop(sheetContext);
-          unawaited(_sendTemporaryPassword(firebase, messenger, user));
+          unawaited(_sendTemporaryPassword(messenger, user));
         },
         onDeleteUser: () {
           Navigator.pop(sheetContext);
@@ -1118,7 +1124,6 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
   }
 
   Future<void> _sendTemporaryPassword(
-    FirebaseService firebase,
     ScaffoldMessengerState messenger,
     AppUser user,
   ) async {
@@ -1130,18 +1135,12 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
       return;
     }
     messenger.showSnackBar(
-      SnackBar(content: Text('Sending temporary password email to $email...')),
+      SnackBar(
+        content: Text(
+          'Temporary password is only available immediately after registration. Use the registration confirmation panel to send it to $email.',
+        ),
+      ),
     );
-    try {
-      await firebase.sendTemporaryPasswordSetupEmail(user);
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Temporary password email sent to $email.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
-    }
   }
 
   Future<void> _deleteUser(BuildContext context, AppUser user) async {
@@ -1653,9 +1652,11 @@ class _CredentialConfirmationPanel extends StatelessWidget {
             FilledButton.icon(
               onPressed: () async {
                 try {
-                  await context
-                      .read<FirebaseService>()
-                      .sendTemporaryPasswordSetupEmail(user);
+                  await context.read<FirebaseService>().sendSetupEmail(
+                    user.email,
+                    user: user,
+                    temporaryPassword: temporaryPassword,
+                  );
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -3249,6 +3250,8 @@ class _RoomSettingsView extends StatelessWidget {
           children: [
             _CapacitySlider(area: area),
             const SizedBox(height: 12),
+            _RoomStatusToggle(area: area),
+            const SizedBox(height: 12),
             _RolePolicyToggles(area: area),
             const SizedBox(height: 12),
             _RoomUserRoster(area: area, users: users),
@@ -3325,6 +3328,31 @@ class _CapacitySliderState extends State<_CapacitySlider> {
           },
         ),
       ],
+    );
+  }
+}
+
+class _RoomStatusToggle extends StatelessWidget {
+  const _RoomStatusToggle({required this.area});
+
+  final Area area;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      value: area.active,
+      secondary: Icon(
+        area.active ? Icons.sensor_door_rounded : Icons.lock_rounded,
+      ),
+      title: const Text(
+        'Room Status',
+        style: TextStyle(fontWeight: FontWeight.w900),
+      ),
+      subtitle: Text(area.active ? 'Active for access' : 'Off for maintenance'),
+      onChanged: (value) {
+        context.read<AreaProvider>().updateArea(area.copyWith(active: value));
+      },
     );
   }
 }
@@ -3992,6 +4020,33 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
           ),
         ],
         const SizedBox(height: 12),
+        StreamBuilder<List<RoomAccessRecord>>(
+          stream: context.read<FirebaseService>().watchRoomAccessRecords(
+            limit: 500,
+          ),
+          builder: (context, snapshot) {
+            final records = _filteredRoomRecords(
+              snapshot.data ?? const <RoomAccessRecord>[],
+            );
+            return Column(
+              children: [
+                _AccessLogPanel(
+                  child: _RoomActivityDistribution(logs: filteredLogs),
+                ),
+                const SizedBox(height: 12),
+                _AccessLogPanel(
+                  child: _RoomSessionReport(
+                    records: records,
+                    onExport: records.isEmpty
+                        ? null
+                        : () => _exportRoomHistoryReport(context, records),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 12),
         _AccessLogPanel(
           padding: EdgeInsets.zero,
           child: Column(
@@ -4071,6 +4126,41 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
     }).toList();
   }
 
+  List<RoomAccessRecord> _filteredRoomRecords(List<RoomAccessRecord> records) {
+    return records.where((record) {
+      if (_room != 'all' && _accessKey(record.areaName) != _accessKey(_room)) {
+        return false;
+      }
+      if (_selectedDate != null &&
+          !_sameDay(record.timestamp, _selectedDate!)) {
+        return false;
+      }
+      if (_selectedDate == null && !_matchesPeriod(record.timestamp)) {
+        return false;
+      }
+      return true;
+    }).toList()..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+  }
+
+  Future<void> _exportRoomHistoryReport(
+    BuildContext context,
+    List<RoomAccessRecord> records,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await SecurityReportService().writeRoomHistoryReport(
+        records,
+      );
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Room history report saved: ${file.path}')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
   bool _matchesPeriod(DateTime timestamp) {
     final now = DateTime.now();
     switch (_period) {
@@ -4136,6 +4226,290 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
       ),
     ];
   }
+}
+
+class _RoomActivityDistribution extends StatelessWidget {
+  const _RoomActivityDistribution({required this.logs});
+
+  final List<AccessLog> logs;
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = <String, int>{};
+    for (final log in logs) {
+      final room = log.areaName.trim().isEmpty
+          ? 'Unknown room'
+          : log.areaName.trim();
+      counts[room] = (counts[room] ?? 0) + 1;
+    }
+    final entries = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final visible = entries.take(6).toList();
+    final maxCount = visible.isEmpty
+        ? 1.0
+        : visible.map((entry) => entry.value).reduce(math.max).toDouble();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Activity Distribution by Room',
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+              ),
+            ),
+            Text(
+              DateFormat('d MMM, h:mm a').format(DateTime.now()),
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (visible.isEmpty)
+          const _EmptyState(
+            icon: Icons.bar_chart_rounded,
+            title: 'No room activity for this filter',
+          )
+        else
+          SizedBox(
+            height: 220,
+            child: BarChart(
+              BarChartData(
+                maxY: maxCount + 1,
+                gridData: const FlGridData(show: true),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 32,
+                      getTitlesWidget: (value, meta) => Text(
+                        value.toInt().toString(),
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 44,
+                      getTitlesWidget: (value, meta) {
+                        final index = value.toInt();
+                        if (index < 0 || index >= visible.length) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            _shortRoomLabel(visible[index].key),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                barGroups: [
+                  for (var i = 0; i < visible.length; i++)
+                    BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: visible[i].value.toDouble(),
+                          width: 18,
+                          borderRadius: BorderRadius.circular(4),
+                          color: const Color(0xFF0D9488),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _RoomSessionReport extends StatelessWidget {
+  const _RoomSessionReport({required this.records, required this.onExport});
+
+  final List<RoomAccessRecord> records;
+  final VoidCallback? onExport;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _sessionRows(records);
+    final openCount = rows.where((row) => row.open).length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Room History Report',
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onExport,
+              icon: const Icon(Icons.file_download_rounded),
+              label: const Text('Export'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            _ReportPill(label: 'Sessions', value: '${rows.length}'),
+            _ReportPill(label: 'Open', value: '$openCount'),
+            _ReportPill(label: 'Closed', value: '${rows.length - openCount}'),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (rows.isEmpty)
+          const _EmptyState(
+            icon: Icons.meeting_room_rounded,
+            title: 'No room history for this filter',
+          )
+        else
+          for (final row in rows.take(10)) _RoomSessionLine(row: row),
+      ],
+    );
+  }
+
+  List<_RoomSessionRow> _sessionRows(List<RoomAccessRecord> records) {
+    final sorted = records.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final entries = <String, RoomAccessRecord>{};
+    final rows = <_RoomSessionRow>[];
+    for (final record in sorted) {
+      if (record.isEntry) {
+        entries[record.sessionId] = record;
+        continue;
+      }
+      final entry = entries.remove(record.sessionId);
+      if (entry == null) continue;
+      rows.add(_RoomSessionRow(entry: entry, exit: record));
+    }
+    for (final entry in entries.values) {
+      rows.add(_RoomSessionRow(entry: entry));
+    }
+    rows.sort((a, b) => b.entryAt.compareTo(a.entryAt));
+    return rows;
+  }
+}
+
+class _RoomSessionLine extends StatelessWidget {
+  const _RoomSessionLine({required this.row});
+
+  final _RoomSessionRow row;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        row.open ? Icons.warning_amber_rounded : Icons.check_circle_rounded,
+        color: row.open ? const Color(0xFFF59E0B) : const Color(0xFF16A34A),
+      ),
+      title: Text(
+        '${row.userName} • ${row.roomName}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w900),
+      ),
+      subtitle: Text(
+        'In: ${_preciseDate(row.entryAt)}\n'
+        'Out: ${row.exitAt == null ? 'Still inside' : _preciseDate(row.exitAt!)}',
+      ),
+      trailing: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Text(
+            row.open ? 'OPEN' : 'CLOSED',
+            style: TextStyle(
+              color: row.open
+                  ? const Color(0xFFF59E0B)
+                  : const Color(0xFF16A34A),
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            _durationLabel(row.duration),
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReportPill extends StatelessWidget {
+  const _ReportPill({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      label: Text('$label: $value'),
+      avatar: const Icon(Icons.analytics_rounded, size: 18),
+    );
+  }
+}
+
+class _RoomSessionRow {
+  const _RoomSessionRow({required this.entry, this.exit});
+
+  final RoomAccessRecord entry;
+  final RoomAccessRecord? exit;
+
+  String get userName => entry.userName;
+  String get roomName => entry.areaName;
+  DateTime get entryAt => entry.timestamp;
+  DateTime? get exitAt => exit?.timestamp;
+  bool get open => exit == null;
+  Duration get duration => (exitAt ?? DateTime.now()).difference(entryAt);
+}
+
+String _shortRoomLabel(String value) {
+  final trimmed = value.trim();
+  if (trimmed.length <= 12) return trimmed;
+  return '${trimmed.substring(0, 9)}...';
+}
+
+String _durationLabel(Duration duration) {
+  final safe = duration.isNegative ? Duration.zero : duration;
+  final hours = safe.inHours;
+  final minutes = safe.inMinutes.remainder(60);
+  if (hours <= 0) return '${minutes}m';
+  return '${hours}h ${minutes}m';
 }
 
 class _AccessLogPanel extends StatelessWidget {
