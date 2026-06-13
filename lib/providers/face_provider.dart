@@ -13,7 +13,8 @@ import '../services/local_database_service.dart';
 class FaceProvider extends ChangeNotifier {
   FaceProvider(this._face, this._firebase);
 
-  static const _verificationThreshold = 1.2;
+  static const _verificationThreshold = 0.9;
+  static const _minimumIdentityMargin = 0.08;
 
   final FaceRecognitionService _face;
   final FirebaseService _firebase;
@@ -87,14 +88,21 @@ class FaceProvider extends ChangeNotifier {
     _notifyAfterFrame();
     try {
       final embedding = await _face.embeddingFromFile(capture);
-      var match = await _face.localDb.findNearestFace(
+      final localMatch = await _face.localDb.findNearestFace(
         embedding,
         threshold: _verificationThreshold,
+        minimumMargin: _minimumIdentityMargin,
       );
-      match ??= await _firebase.findNearestRemoteFace(
+      final remoteMatch = await _firebase.findNearestRemoteFace(
         embedding,
         threshold: _verificationThreshold,
+        minimumMargin: _minimumIdentityMargin,
       );
+      final match = remoteMatch == null
+          ? null
+          : localMatch == null || localMatch.userId == remoteMatch.userId
+          ? remoteMatch
+          : null;
       lastDistance = match?.distance;
       lastMatchedUserId = match?.userId;
       loading = false;

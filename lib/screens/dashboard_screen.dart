@@ -5,8 +5,12 @@ import 'dart:math' as math;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../constants/command_center_options.dart';
 import '../models/access_grant.dart';
@@ -226,6 +230,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   title: Text(
                     _pageTitle(page, text),
                     style: const TextStyle(
+                      color: Colors.white,
                       fontWeight: FontWeight.w900,
                       letterSpacing: .35,
                     ),
@@ -2287,6 +2292,7 @@ class _UserEditPanelState extends State<_UserEditPanel> {
   late String _position;
   late List<String> _rooms;
   late String _departmentChoice;
+  String? _photoUrl;
   DateTime _grantStart = DateTime.now();
   DateTime _grantEnd = DateTime.now().add(const Duration(days: 90));
   bool _saving = false;
@@ -2307,6 +2313,7 @@ class _UserEditPanelState extends State<_UserEditPanel> {
         ? 'Staff'
         : 'Student';
     _rooms = [...user.assignedRooms];
+    _photoUrl = user.photoUrl;
   }
 
   @override
@@ -2353,6 +2360,29 @@ class _UserEditPanelState extends State<_UserEditPanel> {
                         icon: const Icon(Icons.close_rounded),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+                  Center(
+                    child: Stack(
+                      children: [
+                        CircleAvatar(
+                          radius: 42,
+                          backgroundImage: _selectedPhotoImage(),
+                          child: _selectedPhotoImage() == null
+                              ? const Icon(Icons.person_rounded, size: 42)
+                              : null,
+                        ),
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: IconButton.filled(
+                            tooltip: 'Change profile picture',
+                            onPressed: _saving ? null : _pickProfilePicture,
+                            icon: const Icon(Icons.photo_camera_rounded),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -2478,6 +2508,7 @@ class _UserEditPanelState extends State<_UserEditPanel> {
       role: 'User',
       position: _position,
       status: 'approved',
+      photoUrl: _photoUrl,
     );
     try {
       final firebase = context.read<FirebaseService>();
@@ -2507,6 +2538,56 @@ class _UserEditPanelState extends State<_UserEditPanel> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<void> _pickProfilePicture() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Choose from Gallery'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: const Text('Take Photo'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 86,
+      maxWidth: 1200,
+    );
+    if (picked == null || !mounted) return;
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(docs.path, 'profile_pictures'));
+    await dir.create(recursive: true);
+    final extension = p.extension(picked.path).isEmpty
+        ? '.jpg'
+        : p.extension(picked.path);
+    final saved = await File(picked.path).copy(
+      p.join(
+        dir.path,
+        '${widget.user.id}-${DateTime.now().millisecondsSinceEpoch}$extension',
+      ),
+    );
+    if (mounted) setState(() => _photoUrl = saved.path);
+  }
+
+  ImageProvider<Object>? _selectedPhotoImage() {
+    final path = _photoUrl?.trim();
+    if (path == null || path.isEmpty) return null;
+    final file = File(path);
+    return file.existsSync() ? FileImage(file) : null;
   }
 
   Area? _areaForRoom(String room) {
@@ -2777,9 +2858,11 @@ class _ZoneControlTabState extends State<_ZoneControlTab> {
     final roomLogs = logs.where((log) => _logBelongsToArea(log, area)).toList();
     final file = await SecurityReportService().writeCsvReport(roomLogs);
     if (!context.mounted) return;
-    ScaffoldMessenger.of(
+    await _shareAdminExport(
       context,
-    ).showSnackBar(SnackBar(content: Text('Room export saved: ${file.path}')));
+      file,
+      subject: 'FAZEKEY room access report - ${_roomLabel(area)}',
+    );
   }
 
   Future<void> _deleteRoom(BuildContext context, Area area) async {
@@ -3882,6 +3965,9 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   String _status = 'all';
   String _room = 'all';
   String _period = 'all';
+  String _historyUser = 'all';
+  String _historyStatus = 'all';
+  bool _showRoomHistory = false;
   DateTime? _selectedDate;
 
   @override
@@ -3898,6 +3984,11 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
         : provider.logs;
     final roomOptions = _roomOptions(sourceLogs);
     final filteredLogs = _filtered(sourceLogs);
+    final roomActivityLogs = _filtered(
+      sourceLogs,
+      includeStatus: false,
+      includeQuery: false,
+    );
     final visibleLogs = filteredLogs.take(widget.initialLimit).toList();
     final grantedCount = filteredLogs.where((log) => log.granted).length;
     final deniedCount = filteredLogs.length - grantedCount;
@@ -3910,32 +4001,37 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
             runSpacing: 12,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              SizedBox(
-                width: 260,
-                child: TextField(
-                  controller: _search,
-                  decoration: const InputDecoration(
-                    labelText: 'Search',
-                    prefixIcon: Icon(Icons.search_rounded),
+              if (!_showRoomHistory) ...[
+                SizedBox(
+                  width: 260,
+                  child: TextField(
+                    controller: _search,
+                    decoration: const InputDecoration(
+                      labelText: 'Search',
+                      prefixIcon: Icon(Icons.search_rounded),
+                    ),
+                    onChanged: (_) => setState(() {}),
                   ),
-                  onChanged: (_) => setState(() {}),
                 ),
-              ),
-              SizedBox(
-                width: 160,
-                child: DropdownButtonFormField<String>(
-                  initialValue: _status,
-                  decoration: const InputDecoration(labelText: 'Status'),
-                  items: const [
-                    DropdownMenuItem(value: 'all', child: Text('All')),
-                    DropdownMenuItem(value: 'granted', child: Text('Granted')),
-                    DropdownMenuItem(value: 'denied', child: Text('Denied')),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _status = value);
-                  },
+                SizedBox(
+                  width: 160,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _status,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: const [
+                      DropdownMenuItem(value: 'all', child: Text('All')),
+                      DropdownMenuItem(
+                        value: 'granted',
+                        child: Text('Granted'),
+                      ),
+                      DropdownMenuItem(value: 'denied', child: Text('Denied')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) setState(() => _status = value);
+                    },
+                  ),
                 ),
-              ),
+              ],
               SizedBox(
                 width: 220,
                 child: DropdownButtonFormField<String>(
@@ -4006,8 +4102,16 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
               ),
               _PeriodChip(
                 label: 'All',
-                selected: _period == 'all',
-                onTap: () => setState(() => _period = 'all'),
+                selected: _period == 'all' && !_showRoomHistory,
+                onTap: () => setState(() {
+                  _period = 'all';
+                  _showRoomHistory = false;
+                }),
+              ),
+              _PeriodChip(
+                label: 'Room History',
+                selected: _showRoomHistory,
+                onTap: () => setState(() => _showRoomHistory = true),
               ),
             ],
           ),
@@ -4019,96 +4123,135 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
                 'Access Log sync is delayed. Firestore will retry automatically.',
           ),
         ],
-        const SizedBox(height: 12),
-        StreamBuilder<List<RoomAccessRecord>>(
-          stream: context.read<FirebaseService>().watchRoomAccessRecords(
-            limit: 500,
-          ),
-          builder: (context, snapshot) {
-            final records = _filteredRoomRecords(
-              snapshot.data ?? const <RoomAccessRecord>[],
-            );
-            return Column(
-              children: [
-                _AccessLogPanel(
-                  child: _RoomActivityDistribution(logs: filteredLogs),
+        if (_showRoomHistory) ...[
+          const SizedBox(height: 12),
+          StreamBuilder<List<RoomAccessRecord>>(
+            stream: context.read<FirebaseService>().watchRoomAccessRecords(
+              limit: 500,
+            ),
+            builder: (context, snapshot) {
+              final sourceRecords = snapshot.data ?? const <RoomAccessRecord>[];
+              final userOptions = _roomHistoryUserOptions(
+                _filteredRoomRecords(
+                  sourceRecords,
+                  includeUser: false,
+                  includeQuery: false,
                 ),
-                const SizedBox(height: 12),
-                _AccessLogPanel(
-                  child: _RoomSessionReport(
-                    records: records,
-                    onExport: records.isEmpty
-                        ? null
-                        : () => _exportRoomHistoryReport(context, records),
+              );
+              final selectedUser = userOptions.contains(_historyUser)
+                  ? _historyUser
+                  : 'all';
+              final historyRoomOptions = _roomHistoryRoomOptions(sourceRecords);
+              final records = _filteredRoomRecords(sourceRecords);
+              return Column(
+                children: [
+                  _AccessLogPanel(
+                    child: _RoomActivityDistribution(logs: roomActivityLogs),
+                  ),
+                  const SizedBox(height: 12),
+                  _AccessLogPanel(
+                    child: _RoomSessionReport(
+                      records: records,
+                      selectedStatus: _historyStatus,
+                      selectedUser: selectedUser,
+                      userOptions: userOptions,
+                      selectedRoom: historyRoomOptions.contains(_room)
+                          ? _room
+                          : 'all',
+                      roomOptions: historyRoomOptions,
+                      selectedDate: _selectedDate,
+                      onStatusChanged: (value) =>
+                          setState(() => _historyStatus = value),
+                      onUserChanged: (value) =>
+                          setState(() => _historyUser = value),
+                      onRoomChanged: (value) => setState(() => _room = value),
+                      onDateTap: _pickLogDate,
+                      onDateCleared: () => setState(() => _selectedDate = null),
+                      onExport: (exportRecords) =>
+                          _exportRoomHistoryReport(context, exportRecords),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ] else ...[
+          const SizedBox(height: 12),
+          _AccessLogPanel(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                if (visibleLogs.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(22),
+                    child: _EmptyState(
+                      icon: Icons.terminal_rounded,
+                      title: 'No access log entries',
+                    ),
+                  )
+                else
+                  for (final log in visibleLogs)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                      child: _TimelineRow(
+                        log: log,
+                        onTap: () => _showSecurityDetail(context, log),
+                      ),
+                    ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        'Total: ${filteredLogs.length}',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        'Granted: $grantedCount',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        'Denied: $deniedCount',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      if (provider.logs.length > widget.initialLimit)
+                        TextButton.icon(
+                          onPressed: provider.loadMore,
+                          icon: const Icon(Icons.expand_more_rounded),
+                          label: const Text('Load more'),
+                        ),
+                      TextButton.icon(
+                        onPressed: filteredLogs.isEmpty
+                            ? null
+                            : () =>
+                                  _exportAccessLogReport(context, filteredLogs),
+                        icon: const Icon(Icons.file_download_rounded),
+                        label: const Text('Export'),
+                      ),
+                    ],
                   ),
                 ),
               ],
-            );
-          },
-        ),
-        const SizedBox(height: 12),
-        _AccessLogPanel(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              if (visibleLogs.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(22),
-                  child: _EmptyState(
-                    icon: Icons.terminal_rounded,
-                    title: 'No access log entries',
-                  ),
-                )
-              else
-                for (final log in visibleLogs)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                    child: _TimelineRow(
-                      log: log,
-                      onTap: () => _showSecurityDetail(context, log),
-                    ),
-                  ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'Total: ${filteredLogs.length}',
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    Text(
-                      'Granted: $grantedCount',
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    Text(
-                      'Denied: $deniedCount',
-                      style: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
-                    if (provider.logs.length > widget.initialLimit)
-                      TextButton.icon(
-                        onPressed: provider.loadMore,
-                        icon: const Icon(Icons.expand_more_rounded),
-                        label: const Text('Load more'),
-                      ),
-                  ],
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
 
-  List<AccessLog> _filtered(List<AccessLog> logs) {
-    final query = _search.text.trim().toLowerCase();
+  List<AccessLog> _filtered(
+    List<AccessLog> logs, {
+    bool includeStatus = true,
+    bool includeQuery = true,
+  }) {
+    final query = includeQuery ? _search.text.trim().toLowerCase() : '';
     return logs.where((log) {
-      if (_status == 'granted' && !log.granted) return false;
-      if (_status == 'denied' && log.granted) return false;
+      if (includeStatus && _status == 'granted' && !log.granted) return false;
+      if (includeStatus && _status == 'denied' && log.granted) return false;
       if (_room != 'all' && _accessKey(log.areaName) != _accessKey(_room)) {
         return false;
       }
@@ -4126,9 +4269,19 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
     }).toList();
   }
 
-  List<RoomAccessRecord> _filteredRoomRecords(List<RoomAccessRecord> records) {
+  List<RoomAccessRecord> _filteredRoomRecords(
+    List<RoomAccessRecord> records, {
+    bool includeUser = true,
+    bool includeQuery = true,
+  }) {
+    final query = includeQuery ? _search.text.trim().toLowerCase() : '';
     return records.where((record) {
       if (_room != 'all' && _accessKey(record.areaName) != _accessKey(_room)) {
+        return false;
+      }
+      if (includeUser &&
+          _historyUser != 'all' &&
+          _accessKey(record.userName) != _accessKey(_historyUser)) {
         return false;
       }
       if (_selectedDate != null &&
@@ -4138,8 +4291,58 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
       if (_selectedDate == null && !_matchesPeriod(record.timestamp)) {
         return false;
       }
+      if (query.isNotEmpty &&
+          ![
+            record.userName,
+            record.areaName,
+            record.event,
+            record.reason,
+          ].join(' ').toLowerCase().contains(query)) {
+        return false;
+      }
       return true;
     }).toList()..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+  }
+
+  List<String> _roomHistoryUserOptions(List<RoomAccessRecord> records) {
+    final users =
+        records
+            .map((record) => record.userName.trim())
+            .where((user) => user.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    return ['all', ...users];
+  }
+
+  List<String> _roomHistoryRoomOptions(List<RoomAccessRecord> records) {
+    final rooms =
+        records
+            .map((record) => record.areaName.trim())
+            .where((room) => room.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    return ['all', ...rooms];
+  }
+
+  Future<void> _exportAccessLogReport(
+    BuildContext context,
+    List<AccessLog> logs,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final file = await SecurityReportService().writeCsvReport(logs);
+      if (!context.mounted) return;
+      await _shareAdminExport(
+        context,
+        file,
+        subject: 'FAZEKEY access log report',
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
   }
 
   Future<void> _exportRoomHistoryReport(
@@ -4152,8 +4355,10 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
         records,
       );
       if (!context.mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Room history report saved: ${file.path}')),
+      await _shareAdminExport(
+        context,
+        file,
+        subject: 'FAZEKEY room history report',
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -4235,19 +4440,31 @@ class _RoomActivityDistribution extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final counts = <String, int>{};
+    final counts = <String, _RoomActivityCount>{};
     for (final log in logs) {
       final room = log.areaName.trim().isEmpty
           ? 'Unknown room'
           : log.areaName.trim();
-      counts[room] = (counts[room] ?? 0) + 1;
+      final count = counts.putIfAbsent(room, _RoomActivityCount.new);
+      final userName = _logUserName(log);
+      count.users[userName] = (count.users[userName] ?? 0) + 1;
+      count.statuses[log.status] = (count.statuses[log.status] ?? 0) + 1;
+      if (log.granted) {
+        count.granted++;
+      } else {
+        count.denied++;
+      }
     }
     final entries = counts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+      ..sort((a, b) => b.value.total.compareTo(a.value.total));
     final visible = entries.take(6).toList();
     final maxCount = visible.isEmpty
         ? 1.0
-        : visible.map((entry) => entry.value).reduce(math.max).toDouble();
+        : visible.map((entry) => entry.value.total).reduce(math.max).toDouble();
+    final totalActivity = visible.fold<int>(
+      0,
+      (total, entry) => total + entry.value.total,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4270,6 +4487,19 @@ class _RoomActivityDistribution extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            _ChartLegend(color: const Color(0xFF0D9488), label: 'Granted'),
+            _ChartLegend(color: const Color(0xFFE11D48), label: 'Denied'),
+            Chip(
+              avatar: const Icon(Icons.timeline_rounded, size: 18),
+              label: Text('Total: $totalActivity'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         if (visible.isEmpty)
           const _EmptyState(
             icon: Icons.bar_chart_rounded,
@@ -4281,6 +4511,21 @@ class _RoomActivityDistribution extends StatelessWidget {
             child: BarChart(
               BarChartData(
                 maxY: maxCount + 1,
+                barTouchData: BarTouchData(
+                  enabled: true,
+                  touchTooltipData: BarTouchTooltipData(
+                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                      final entry = visible[group.x.toInt()];
+                      return BarTooltipItem(
+                        '${entry.key}\nGranted: ${entry.value.granted}\nDenied: ${entry.value.denied}',
+                        const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      );
+                    },
+                  ),
+                ),
                 gridData: const FlGridData(show: true),
                 borderData: FlBorderData(show: false),
                 titlesData: FlTitlesData(
@@ -4332,10 +4577,21 @@ class _RoomActivityDistribution extends StatelessWidget {
                       x: i,
                       barRods: [
                         BarChartRodData(
-                          toY: visible[i].value.toDouble(),
-                          width: 18,
+                          toY: visible[i].value.total.toDouble(),
+                          width: 22,
                           borderRadius: BorderRadius.circular(4),
-                          color: const Color(0xFF0D9488),
+                          rodStackItems: [
+                            BarChartRodStackItem(
+                              0,
+                              visible[i].value.granted.toDouble(),
+                              const Color(0xFF0D9488),
+                            ),
+                            BarChartRodStackItem(
+                              visible[i].value.granted.toDouble(),
+                              visible[i].value.total.toDouble(),
+                              const Color(0xFFE11D48),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -4343,21 +4599,137 @@ class _RoomActivityDistribution extends StatelessWidget {
               ),
             ),
           ),
+        if (visible.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          for (final entry in visible)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _RoomActivityDetail(room: entry.key, count: entry.value),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+class _RoomActivityCount {
+  int granted = 0;
+  int denied = 0;
+  final Map<String, int> users = {};
+  final Map<String, int> statuses = {};
+  int get total => granted + denied;
+}
+
+class _RoomActivityDetail extends StatelessWidget {
+  const _RoomActivityDetail({required this.room, required this.count});
+
+  final String room;
+  final _RoomActivityCount count;
+
+  @override
+  Widget build(BuildContext context) {
+    final users = count.users.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final statuses = count.statuses.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(room, style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text(
+              'Users: ${users.map((entry) => '${entry.key} (${entry.value})').join(', ')}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              'Status: ${statuses.map((entry) => '${entry.key} ${entry.value}').join(', ')}',
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChartLegend extends StatelessWidget {
+  const _ChartLegend({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: const SizedBox(width: 12, height: 12),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
       ],
     );
   }
 }
 
 class _RoomSessionReport extends StatelessWidget {
-  const _RoomSessionReport({required this.records, required this.onExport});
+  const _RoomSessionReport({
+    required this.records,
+    required this.selectedStatus,
+    required this.selectedUser,
+    required this.userOptions,
+    required this.selectedRoom,
+    required this.roomOptions,
+    required this.selectedDate,
+    required this.onStatusChanged,
+    required this.onUserChanged,
+    required this.onRoomChanged,
+    required this.onDateTap,
+    required this.onDateCleared,
+    required this.onExport,
+  });
 
   final List<RoomAccessRecord> records;
-  final VoidCallback? onExport;
+  final String selectedStatus;
+  final String selectedUser;
+  final List<String> userOptions;
+  final String selectedRoom;
+  final List<String> roomOptions;
+  final DateTime? selectedDate;
+  final ValueChanged<String> onStatusChanged;
+  final ValueChanged<String> onUserChanged;
+  final ValueChanged<String> onRoomChanged;
+  final VoidCallback onDateTap;
+  final VoidCallback onDateCleared;
+  final ValueChanged<List<RoomAccessRecord>> onExport;
 
   @override
   Widget build(BuildContext context) {
-    final rows = _sessionRows(records);
-    final openCount = rows.where((row) => row.open).length;
+    final allRows = _sessionRows(records);
+    final rows = allRows.where((row) {
+      if (selectedStatus == 'open') return row.open;
+      if (selectedStatus == 'closed') return !row.open;
+      return true;
+    }).toList();
+    final openCount = allRows.where((row) => row.open).length;
+    final exportRecords = rows.expand((row) => row.records).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4370,7 +4742,9 @@ class _RoomSessionReport extends StatelessWidget {
               ),
             ),
             TextButton.icon(
-              onPressed: onExport,
+              onPressed: exportRecords.isEmpty
+                  ? null
+                  : () => onExport(exportRecords),
               icon: const Icon(Icons.file_download_rounded),
               label: const Text('Export'),
             ),
@@ -4378,12 +4752,104 @@ class _RoomSessionReport extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 220,
+              child: DropdownButtonFormField<String>(
+                initialValue: userOptions.contains(selectedUser)
+                    ? selectedUser
+                    : 'all',
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'User'),
+                items: [
+                  const DropdownMenuItem(
+                    value: 'all',
+                    child: Text('All users'),
+                  ),
+                  for (final user in userOptions)
+                    if (user != 'all')
+                      DropdownMenuItem(
+                        value: user,
+                        child: Text(
+                          user,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                ],
+                onChanged: (value) => onUserChanged(value ?? 'all'),
+              ),
+            ),
+            SizedBox(
+              width: 220,
+              child: DropdownButtonFormField<String>(
+                initialValue: roomOptions.contains(selectedRoom)
+                    ? selectedRoom
+                    : 'all',
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Room'),
+                items: [
+                  const DropdownMenuItem(
+                    value: 'all',
+                    child: Text('All rooms'),
+                  ),
+                  for (final room in roomOptions)
+                    if (room != 'all')
+                      DropdownMenuItem(
+                        value: room,
+                        child: Text(
+                          room,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                ],
+                onChanged: (value) => onRoomChanged(value ?? 'all'),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: onDateTap,
+              icon: const Icon(Icons.event_rounded),
+              label: Text(
+                selectedDate == null
+                    ? 'Date'
+                    : DateFormat.yMMMd().format(selectedDate!),
+              ),
+            ),
+            if (selectedDate != null)
+              IconButton(
+                tooltip: 'Clear date',
+                onPressed: onDateCleared,
+                icon: const Icon(Icons.close_rounded),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
           spacing: 12,
           runSpacing: 8,
           children: [
-            _ReportPill(label: 'Sessions', value: '${rows.length}'),
-            _ReportPill(label: 'Open', value: '$openCount'),
-            _ReportPill(label: 'Closed', value: '${rows.length - openCount}'),
+            _ReportPill(
+              label: 'Sessions',
+              value: '${allRows.length}',
+              selected: selectedStatus == 'all',
+              onTap: () => onStatusChanged('all'),
+            ),
+            _ReportPill(
+              label: 'Open',
+              value: '$openCount',
+              selected: selectedStatus == 'open',
+              onTap: () => onStatusChanged('open'),
+            ),
+            _ReportPill(
+              label: 'Closed',
+              value: '${allRows.length - openCount}',
+              selected: selectedStatus == 'closed',
+              onTap: () => onStatusChanged('closed'),
+            ),
           ],
         ),
         const SizedBox(height: 10),
@@ -4435,7 +4901,7 @@ class _RoomSessionLine extends StatelessWidget {
         color: row.open ? const Color(0xFFF59E0B) : const Color(0xFF16A34A),
       ),
       title: Text(
-        '${row.userName} • ${row.roomName}',
+        '${row.userName} - ${row.roomName}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w900),
@@ -4470,16 +4936,40 @@ class _RoomSessionLine extends StatelessWidget {
 }
 
 class _ReportPill extends StatelessWidget {
-  const _ReportPill({required this.label, required this.value});
+  const _ReportPill({
+    required this.label,
+    required this.value,
+    required this.selected,
+    required this.onTap,
+  });
 
   final String label;
   final String value;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Chip(
-      label: Text('$label: $value'),
-      avatar: const Icon(Icons.analytics_rounded, size: 18),
+    return ActionChip(
+      onPressed: onTap,
+      backgroundColor: selected
+          ? const Color(0xFF0D9488).withValues(alpha: .18)
+          : null,
+      side: BorderSide(
+        color: selected ? const Color(0xFF0D9488) : const Color(0xFFE2E8F0),
+      ),
+      label: Text(
+        '$label: $value',
+        style: TextStyle(
+          color: selected ? const Color(0xFF0D9488) : null,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+      avatar: Icon(
+        selected ? Icons.check_circle_rounded : Icons.analytics_rounded,
+        size: 18,
+        color: selected ? const Color(0xFF0D9488) : null,
+      ),
     );
   }
 }
@@ -4496,6 +4986,7 @@ class _RoomSessionRow {
   DateTime? get exitAt => exit?.timestamp;
   bool get open => exit == null;
   Duration get duration => (exitAt ?? DateTime.now()).difference(entryAt);
+  List<RoomAccessRecord> get records => [entry, ?exit];
 }
 
 String _shortRoomLabel(String value) {
@@ -4510,6 +5001,24 @@ String _durationLabel(Duration duration) {
   final minutes = safe.inMinutes.remainder(60);
   if (hours <= 0) return '${minutes}m';
   return '${hours}h ${minutes}m';
+}
+
+Future<void> _shareAdminExport(
+  BuildContext context,
+  File file, {
+  required String subject,
+}) async {
+  final renderBox = context.findRenderObject() as RenderBox?;
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [XFile(file.path)],
+      subject: subject,
+      text: subject,
+      sharePositionOrigin: renderBox == null
+          ? null
+          : renderBox.localToGlobal(Offset.zero) & renderBox.size,
+    ),
+  );
 }
 
 class _AccessLogPanel extends StatelessWidget {

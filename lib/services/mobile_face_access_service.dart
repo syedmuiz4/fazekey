@@ -28,15 +28,19 @@ class FaceAccessResult {
 }
 
 class MobileFaceAccessService {
-  MobileFaceAccessService({FirebaseFirestore? firestore, this.threshold = 1.2})
-    : _firestore = firestore ?? FirebaseFirestore.instance,
-      super();
+  MobileFaceAccessService({
+    FirebaseFirestore? firestore,
+    this.threshold = 0.9,
+    this.minimumIdentityMargin = 0.08,
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
+       super();
 
   static const int _staticFrameWidth = 720;
   static const int _staticFrameHeight = 480;
 
   final FirebaseFirestore _firestore;
   final double threshold;
+  final double minimumIdentityMargin;
   Future<void> _detectorQueue = Future.value();
   DateTime? _lastDetectorStartedAt;
 
@@ -134,7 +138,13 @@ class MobileFaceAccessService {
   Future<FaceAccessResult> checkAccess(List<double> currentEmbedding) async {
     final matches = await loadRegisteredFaceDistances(currentEmbedding);
     final bestMatch = matches.isEmpty ? null : matches.first;
-    final granted = bestMatch != null && bestMatch.distance < threshold;
+    final identityIsDistinct =
+        matches.length < 2 ||
+        matches[1].distance - bestMatch!.distance >= minimumIdentityMargin;
+    final granted =
+        bestMatch != null &&
+        bestMatch.distance < threshold &&
+        identityIsDistinct;
 
     if (granted) {
       await triggerAccessGranted(bestMatch);

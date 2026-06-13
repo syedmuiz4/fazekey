@@ -18,6 +18,7 @@ import '../providers/auth_provider.dart';
 import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import 'edit_profile_screen.dart';
+import 'login_screen.dart';
 import 'welcome_screen.dart';
 
 class UserDashboardScreen extends StatefulWidget {
@@ -610,7 +611,7 @@ class _CampusNewsCarouselState extends State<_CampusNewsCarousel> {
   }
 }
 
-class _CurrentRoomCard extends StatelessWidget {
+class _CurrentRoomCard extends StatefulWidget {
   const _CurrentRoomCard({
     required this.user,
     required this.firebase,
@@ -621,19 +622,29 @@ class _CurrentRoomCard extends StatelessWidget {
   final _UserText text;
 
   @override
+  State<_CurrentRoomCard> createState() => _CurrentRoomCardState();
+}
+
+class _CurrentRoomCardState extends State<_CurrentRoomCard> {
+  bool _showDetails = false;
+
+  @override
   Widget build(BuildContext context) {
-    final currentUser = user;
+    final currentUser = widget.user;
     if (currentUser == null) return const SizedBox.shrink();
     return StreamBuilder<List<AccessGrant>>(
-      stream: firebase.watchAccessGrants(userId: currentUser.id, limit: 80),
+      stream: widget.firebase.watchAccessGrants(
+        userId: currentUser.id,
+        limit: 80,
+      ),
       builder: (context, grantSnapshot) {
         final grants = grantSnapshot.data ?? const <AccessGrant>[];
         return StreamBuilder<List<Area>>(
-          stream: firebase.watchAreas(),
+          stream: widget.firebase.watchAreas(),
           builder: (context, areaSnapshot) {
             final areas = areaSnapshot.data ?? const <Area>[];
             return StreamBuilder<RoomAccessRecord?>(
-              stream: firebase.watchActiveRoomSession(currentUser.id),
+              stream: widget.firebase.watchActiveRoomSession(currentUser.id),
               builder: (context, snapshot) {
                 final record = snapshot.data;
                 final accessRoom = record?.areaName;
@@ -642,7 +653,7 @@ class _CurrentRoomCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        text.currentRoom,
+                        widget.text.currentRoom,
                         style: const TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w900,
@@ -652,7 +663,7 @@ class _CurrentRoomCard extends StatelessWidget {
                       const SizedBox(height: 10),
                       if (accessRoom == null)
                         Text(
-                          text.noActiveRoom,
+                          widget.text.noActiveRoom,
                           style: const TextStyle(
                             color: Color(0xFF64748B),
                             fontWeight: FontWeight.w800,
@@ -684,8 +695,8 @@ class _CurrentRoomCard extends StatelessWidget {
                         const SizedBox(height: 6),
                         Text(
                           record == null
-                              ? text.accessReady
-                              : '${text.checkedIn}: ${DateFormat.yMMMd().add_jm().format(record.timestamp)}',
+                              ? widget.text.accessReady
+                              : '${widget.text.checkedIn}: ${DateFormat.yMMMd().add_jm().format(record.timestamp)}',
                           style: const TextStyle(
                             color: Color(0xFF64748B),
                             fontWeight: FontWeight.w700,
@@ -693,26 +704,43 @@ class _CurrentRoomCard extends StatelessWidget {
                         ),
                       ],
                       const SizedBox(height: 12),
-                      _RoomCapacityList(
-                        rooms: _visibleRooms(currentUser, grants),
-                        areas: areas,
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () =>
+                              setState(() => _showDetails = !_showDetails),
+                          icon: Icon(
+                            _showDetails
+                                ? Icons.expand_less_rounded
+                                : Icons.expand_more_rounded,
+                          ),
+                          label: Text(
+                            _showDetails ? 'Hide room details' : 'Room details',
+                          ),
+                        ),
                       ),
+                      if (_showDetails)
+                        _RoomCapacityList(
+                          rooms: _availableRoomNames(areas, grants),
+                          areas: areas,
+                        ),
                       if (record != null) ...[
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton.icon(
                             onPressed: () async {
-                              await firebase.closeActiveRoomSessionForUser(
-                                currentUser,
-                              );
+                              await widget.firebase
+                                  .closeActiveRoomSessionForUser(currentUser);
                               if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(text.signedOutRoom)),
+                                SnackBar(
+                                  content: Text(widget.text.signedOutRoom),
+                                ),
                               );
                             },
                             icon: const Icon(Icons.logout_rounded),
-                            label: Text(text.signOutRoom),
+                            label: Text(widget.text.signOutRoom),
                           ),
                         ),
                       ],
@@ -754,13 +782,16 @@ class _HomeRoomActionButton extends StatelessWidget {
   Future<void> _showRoomActionDialog(BuildContext context) async {
     final currentUser = user;
     if (currentUser == null) return;
-    final auth = context.read<AuthProvider>();
     await firebase.closeActiveRoomSessionForUser(currentUser);
+    if (!context.mounted) return;
+    final auth = context.read<AuthProvider>();
     final ok = await auth.logout();
     if (!context.mounted || !ok) return;
-    Navigator.of(
-      context,
-    ).pushNamedAndRemoveUntil(WelcomeScreen.route, (_) => false);
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      LoginScreen.route,
+      (_) => false,
+      arguments: const {'showEnterRoomPrompt': true},
+    );
   }
 }
 
@@ -921,7 +952,7 @@ class _RoomCapacityList extends StatelessWidget {
     if (rooms.isEmpty) return const SizedBox.shrink();
     return Column(
       children: [
-        for (final room in rooms.take(4))
+        for (final room in rooms)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: _RoomCapacityRow(room: room, area: _matchingArea(room)),
@@ -951,7 +982,7 @@ class _RoomCapacityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final currentArea = area;
     final capacity = currentArea?.capacity ?? 0;
-    final occupied = currentArea?.currentOccupancy ?? 0;
+    final occupied = (currentArea?.currentOccupancy ?? 0).clamp(0, capacity);
     final label = capacity <= 0
         ? 'Capacity available'
         : '$occupied / $capacity occupied';
@@ -994,17 +1025,21 @@ DateTime? _latestGrantExpiry(List<AccessGrant> grants) {
   return dated.isEmpty ? null : dated.first.endAt;
 }
 
-List<String> _visibleRooms(AppUser user, List<AccessGrant> grants) {
-  final values = <String>[
-    ...grants.map((grant) => grant.areaName),
-    ...user.assignedRooms,
-  ];
+List<String> _availableRoomNames(List<Area> areas, List<AccessGrant> grants) {
+  final activeAreas = areas.where((area) => area.active).toList();
+  final grantedKeys = grants.map((grant) => _accessKey(grant.areaName)).toSet();
+  activeAreas.sort((a, b) {
+    final aGranted = grantedKeys.contains(_accessKey(_areaDisplay(a)));
+    final bGranted = grantedKeys.contains(_accessKey(_areaDisplay(b)));
+    if (aGranted != bGranted) return aGranted ? -1 : 1;
+    return _areaDisplay(a).compareTo(_areaDisplay(b));
+  });
   final rooms = <String>[];
-  for (final value in values) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) continue;
-    if (rooms.any((room) => _accessKey(room) == _accessKey(trimmed))) continue;
-    rooms.add(trimmed);
+  for (final area in activeAreas) {
+    final label = _areaDisplay(area);
+    if (label.trim().isEmpty) continue;
+    if (rooms.any((room) => _accessKey(room) == _accessKey(label))) continue;
+    rooms.add(label);
   }
   return rooms;
 }
@@ -2029,7 +2064,7 @@ class _RoomPermissionGrid extends StatelessWidget {
 
 String _capacityLabel(Area? area) {
   if (area == null || area.capacity <= 0) return 'Capacity available';
-  return '${area.currentOccupancy} / ${area.capacity} occupied';
+  return '${area.currentOccupancy.clamp(0, area.capacity)} / ${area.capacity} occupied';
 }
 
 class _UserBottomBar extends StatelessWidget {

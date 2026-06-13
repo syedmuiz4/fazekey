@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../models/area.dart';
 import '../providers/auth_provider.dart';
+import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import '../widgets/corporate_chrome.dart';
 import '../widgets/glass_card.dart';
@@ -25,6 +27,122 @@ class _LoginScreenState extends State<LoginScreen> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   bool _showPasswordLogin = false;
+  bool _enterRoomPromptScheduled = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final args = ModalRoute.of(context)?.settings.arguments;
+    final showPrompt =
+        args is Map<String, dynamic> && args['showEnterRoomPrompt'] == true;
+    if (!showPrompt || _enterRoomPromptScheduled) return;
+    _enterRoomPromptScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _showEnterRoomPrompt();
+    });
+  }
+
+  Future<void> _showEnterRoomPrompt() async {
+    final enterRoom = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enter New Room'),
+        content: const Text(
+          'You have exited the room and signed out. Would you like to enter another room?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Close'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Enter New Room'),
+          ),
+        ],
+      ),
+    );
+    if (enterRoom != true || !mounted) return;
+    await _showRoomSelection();
+  }
+
+  Future<void> _showRoomSelection() async {
+    final firebase = context.read<FirebaseService>();
+    final snapshot = await firebase.firestore.collection('areas').get();
+    final rooms =
+        snapshot.docs
+            .map((doc) => Area.fromMap(doc.id, doc.data()))
+            .where((area) => area.active)
+            .toList()
+          ..sort((a, b) => _roomLabel(a).compareTo(_roomLabel(b)));
+    if (!mounted) return;
+    if (rooms.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No active rooms are available.')),
+      );
+      return;
+    }
+    var selectedArea = rooms.first;
+    final area = await showDialog<Area>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Select Room'),
+          content: DropdownButtonFormField<String>(
+            initialValue: selectedArea.id,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Room'),
+            items: [
+              for (final room in rooms)
+                DropdownMenuItem(
+                  value: room.id,
+                  child: Text(
+                    _roomLabel(room),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              setDialogState(() {
+                selectedArea = rooms.firstWhere((room) => room.id == value);
+              });
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, selectedArea),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (area == null || !mounted) return;
+    Navigator.of(context).pushNamed(
+      FaceLoginScreen.route,
+      arguments: {
+        'roomId': area.id,
+        'roomName': _roomLabel(area),
+        'sessionAction': 'entry',
+      },
+    );
+  }
+
+  String _roomLabel(Area area) {
+    final room = area.roomNumber.trim();
+    final name = area.name.trim();
+    if (room.isNotEmpty && name.isNotEmpty) return '$room - $name';
+    if (room.isNotEmpty) return room;
+    if (name.isNotEmpty) return name;
+    return area.id;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -88,7 +206,10 @@ class _LoginScreenState extends State<LoginScreen> {
                               'System Authentication',
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.headlineSmall
-                                  ?.copyWith(fontWeight: FontWeight.w900),
+                                  ?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                  ),
                             ),
                             const SizedBox(height: 34),
                             SizedBox(

@@ -22,17 +22,14 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
+  bool _adminReadScheduled = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(context.read<AlertProvider>().markAllRead().catchError((_) {}));
-      unawaited(
-        context.read<FirebaseService>().markAdminNotificationsRead().catchError(
-          (_) {},
-        ),
-      );
     });
   }
 
@@ -46,80 +43,141 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           title: const Text('Recent Alerts'),
           backgroundColor: AppBackground.slateGray,
         ),
-        body: StreamBuilder<List<RoomAccessRequest>>(
-          stream: context.read<FirebaseService>().watchRoomAccessRequests(),
-          builder: (context, snapshot) {
+        body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: context.read<FirebaseService>().watchAdminNotifications(),
+          builder: (context, adminSnapshot) {
             final firebase = context.read<FirebaseService>();
-            final requests = (snapshot.data ?? const <RoomAccessRequest>[])
-                .where((request) => request.isOpen)
-                .toList();
-            return StreamBuilder(
-              stream: firebase.firestore
-                  .collection('passwordResetRequests')
-                  .where('status', isEqualTo: 'open')
-                  .snapshots(),
-              builder: (context, resetSnapshot) {
-                final resetRequests = resetSnapshot.data?.docs ?? const [];
+            final adminNotifications = adminSnapshot.data?.docs ?? const [];
+            if (!_adminReadScheduled &&
+                adminNotifications.any((doc) => doc.data()['read'] != true)) {
+              _adminReadScheduled = true;
+              Future<void>.delayed(const Duration(milliseconds: 700), () {
+                if (!mounted) return;
+                unawaited(
+                  firebase.markAdminNotificationsRead().catchError((_) {}),
+                );
+              });
+            }
+            return StreamBuilder<List<RoomAccessRequest>>(
+              stream: firebase.watchRoomAccessRequests(),
+              builder: (context, snapshot) {
+                final requests = (snapshot.data ?? const <RoomAccessRequest>[])
+                    .where((request) => request.isOpen)
+                    .toList();
                 return StreamBuilder(
                   stream: firebase.firestore
-                      .collection('supportRequests')
+                      .collection('passwordResetRequests')
                       .where('status', isEqualTo: 'open')
                       .snapshots(),
-                  builder: (context, supportSnapshot) {
-                    final supportRequests =
-                        supportSnapshot.data?.docs ?? const [];
+                  builder: (context, resetSnapshot) {
+                    final resetRequests = resetSnapshot.data?.docs ?? const [];
                     return StreamBuilder(
                       stream: firebase.firestore
-                          .collection('profileChangeRequests')
+                          .collection('supportRequests')
                           .where('status', isEqualTo: 'open')
                           .snapshots(),
-                      builder: (context, profileSnapshot) {
-                        final profileRequests =
-                            profileSnapshot.data?.docs ?? const [];
+                      builder: (context, supportSnapshot) {
+                        final supportRequests =
+                            supportSnapshot.data?.docs ?? const [];
                         return StreamBuilder(
                           stream: firebase.firestore
-                              .collection('profilePhotoRequests')
+                              .collection('profileChangeRequests')
                               .where('status', isEqualTo: 'open')
                               .snapshots(),
-                          builder: (context, photoSnapshot) {
-                            final photoRequests =
-                                photoSnapshot.data?.docs ?? const [];
-                            if (alerts.isEmpty &&
-                                requests.isEmpty &&
-                                resetRequests.isEmpty &&
-                                supportRequests.isEmpty &&
-                                profileRequests.isEmpty &&
-                                photoRequests.isEmpty) {
-                              return const _EmptyAlerts();
-                            }
-                            return ListView(
-                              padding: const EdgeInsets.all(18),
-                              children: [
-                                for (final request in photoRequests) ...[
-                                  _ProfilePhotoRequestCard(doc: request),
-                                  const SizedBox(height: 12),
-                                ],
-                                for (final request in profileRequests) ...[
-                                  _ProfileChangeRequestCard(doc: request),
-                                  const SizedBox(height: 12),
-                                ],
-                                for (final request in supportRequests) ...[
-                                  _SupportRequestCard(doc: request),
-                                  const SizedBox(height: 12),
-                                ],
-                                for (final request in resetRequests) ...[
-                                  _PasswordResetRequestCard(doc: request),
-                                  const SizedBox(height: 12),
-                                ],
-                                for (final request in requests) ...[
-                                  _RoomRequestCard(request: request),
-                                  const SizedBox(height: 12),
-                                ],
-                                for (final alert in alerts) ...[
-                                  _AlertCard(alert: alert),
-                                  const SizedBox(height: 12),
-                                ],
-                              ],
+                          builder: (context, profileSnapshot) {
+                            final profileRequests =
+                                profileSnapshot.data?.docs ?? const [];
+                            return StreamBuilder(
+                              stream: firebase.firestore
+                                  .collection('profilePhotoRequests')
+                                  .where('status', isEqualTo: 'open')
+                                  .snapshots(),
+                              builder: (context, photoSnapshot) {
+                                final photoRequests =
+                                    photoSnapshot.data?.docs ?? const [];
+                                if (alerts.isEmpty &&
+                                    adminNotifications.isEmpty &&
+                                    requests.isEmpty &&
+                                    resetRequests.isEmpty &&
+                                    supportRequests.isEmpty &&
+                                    profileRequests.isEmpty &&
+                                    photoRequests.isEmpty) {
+                                  return const _EmptyAlerts();
+                                }
+                                final notificationItems =
+                                    <_DatedNotificationItem>[
+                                      for (final notification
+                                          in adminNotifications)
+                                        _DatedNotificationItem(
+                                          timestamp: _documentCreatedAt(
+                                            notification,
+                                          ),
+                                          child: _AdminNotificationCard(
+                                            doc: notification,
+                                          ),
+                                        ),
+                                      for (final request in photoRequests)
+                                        _DatedNotificationItem(
+                                          timestamp: _documentCreatedAt(
+                                            request,
+                                          ),
+                                          child: _ProfilePhotoRequestCard(
+                                            doc: request,
+                                          ),
+                                        ),
+                                      for (final request in profileRequests)
+                                        _DatedNotificationItem(
+                                          timestamp: _documentCreatedAt(
+                                            request,
+                                          ),
+                                          child: _ProfileChangeRequestCard(
+                                            doc: request,
+                                          ),
+                                        ),
+                                      for (final request in supportRequests)
+                                        _DatedNotificationItem(
+                                          timestamp: _documentCreatedAt(
+                                            request,
+                                          ),
+                                          child: _SupportRequestCard(
+                                            doc: request,
+                                          ),
+                                        ),
+                                      for (final request in resetRequests)
+                                        _DatedNotificationItem(
+                                          timestamp: _documentCreatedAt(
+                                            request,
+                                          ),
+                                          child: _PasswordResetRequestCard(
+                                            doc: request,
+                                          ),
+                                        ),
+                                      for (final request in requests)
+                                        _DatedNotificationItem(
+                                          timestamp: request.createdAt,
+                                          child: _RoomRequestCard(
+                                            request: request,
+                                          ),
+                                        ),
+                                      for (final alert in alerts)
+                                        _DatedNotificationItem(
+                                          timestamp: alert.timestamp,
+                                          child: _AlertCard(alert: alert),
+                                        ),
+                                    ]..sort(
+                                      (a, b) =>
+                                          b.timestamp.compareTo(a.timestamp),
+                                    );
+                                return ListView(
+                                  padding: const EdgeInsets.all(18),
+                                  children: [
+                                    for (final item in notificationItems) ...[
+                                      item.child,
+                                      const SizedBox(height: 12),
+                                    ],
+                                  ],
+                                );
+                              },
                             );
                           },
                         );
@@ -130,6 +188,85 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               },
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+DateTime _documentCreatedAt(
+  QueryDocumentSnapshot<Map<String, dynamic>> document,
+) {
+  return (document.data()['createdAt'] as Timestamp?)?.toDate() ?? DateTime(0);
+}
+
+class _DatedNotificationItem {
+  const _DatedNotificationItem({required this.timestamp, required this.child});
+
+  final DateTime timestamp;
+  final Widget child;
+}
+
+class _AdminNotificationCard extends StatelessWidget {
+  const _AdminNotificationCard({required this.doc});
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+
+  @override
+  Widget build(BuildContext context) {
+    final data = doc.data();
+    final title = (data['title'] ?? 'Notification').toString();
+    final message = (data['message'] ?? '').toString();
+    final type = (data['type'] ?? 'notification').toString();
+    final unread = data['read'] != true;
+    final timestamp =
+        (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: unread
+            ? [
+                BoxShadow(
+                  color: const Color(0xFF22D3EE).withValues(alpha: .35),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
+              ]
+            : const [],
+      ),
+      child: GlassCard(
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: CircleAvatar(
+            backgroundColor: unread
+                ? const Color(0xFF22D3EE).withValues(alpha: .18)
+                : const Color(0xFF64748B).withValues(alpha: .12),
+            child: Icon(
+              unread
+                  ? Icons.notifications_active_rounded
+                  : Icons.notifications_rounded,
+              color: unread ? const Color(0xFF0891B2) : const Color(0xFF64748B),
+            ),
+          ),
+          title: Text(
+            title,
+            style: TextStyle(
+              fontWeight: unread ? FontWeight.w900 : FontWeight.w700,
+            ),
+          ),
+          subtitle: Text(
+            '$message\n${DateFormat.yMMMd().add_jm().format(timestamp)}',
+          ),
+          trailing: Text(
+            unread ? 'NEW' : type.toUpperCase(),
+            style: TextStyle(
+              color: unread ? const Color(0xFF0891B2) : const Color(0xFF64748B),
+              fontWeight: FontWeight.w900,
+              fontSize: 11,
+            ),
+          ),
+          isThreeLine: true,
         ),
       ),
     );
@@ -490,33 +627,7 @@ class _EmptyAlerts extends StatelessWidget {
   const _EmptyAlerts();
 
   @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        GlassCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'No alerts recorded',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Intrusion, lockdown, and denied-access events will appear here when they occur.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
 class _AlertCard extends StatelessWidget {

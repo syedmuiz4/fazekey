@@ -97,26 +97,35 @@ class LocalDatabaseService {
 
   Future<LocalFaceMatch?> findNearestFace(
     List<double> embedding, {
-    double threshold = 1.2,
+    double threshold = 0.9,
+    double minimumMargin = 0.08,
   }) async {
     final db = await database;
     final rows = await db.query('faces');
-    LocalFaceMatch? best;
+    final matches = <LocalFaceMatch>[];
     for (final row in rows) {
       final stored = (jsonDecode(row['embedding'] as String) as List)
           .cast<num>()
           .map((e) => e.toDouble())
           .toList();
       final distance = euclideanDistance(embedding, stored);
-      if (best == null || distance < best.distance) {
-        best = LocalFaceMatch(
-          userId: row['userId'] as String,
-          name: (row['name'] ?? '').toString(),
-          distance: distance,
+      if (distance.isFinite) {
+        matches.add(
+          LocalFaceMatch(
+            userId: row['userId'] as String,
+            name: (row['name'] ?? '').toString(),
+            distance: distance,
+          ),
         );
       }
     }
+    matches.sort((a, b) => a.distance.compareTo(b.distance));
+    final best = matches.isEmpty ? null : matches.first;
     if (best == null || best.distance > threshold) return null;
+    if (matches.length > 1 &&
+        matches[1].distance - best.distance < minimumMargin) {
+      return null;
+    }
     return best;
   }
 

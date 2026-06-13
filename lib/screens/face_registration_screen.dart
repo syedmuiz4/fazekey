@@ -201,7 +201,7 @@ class _FaceRegistrationScreenState extends State<FaceRegistrationScreen> {
         body: SafeArea(child: Center(child: CircularProgressIndicator())),
       );
     }
-    if (selectedUser != null && !auth.isAdmin) {
+    if (selectedUser != null && auth.user != null && !auth.isAdmin) {
       return const Scaffold(
         backgroundColor: AppBackground.slateGray,
         body: SafeArea(

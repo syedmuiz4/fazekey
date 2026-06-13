@@ -248,7 +248,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           user != null &&
           verifiedArea != null &&
           registeredForScanner &&
-          user.canAccessRegisteredArea(scanArea);
+          user.canAccessArea(scanArea);
       final temporalAllowed = !timingDenied;
       var hasAccess =
           user != null &&

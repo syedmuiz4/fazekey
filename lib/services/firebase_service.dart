@@ -105,6 +105,15 @@ class FirebaseService {
         .snapshots();
   }
 
+  Stream<QuerySnapshot<Map<String, dynamic>>> watchAdminNotifications({
+    int limit = 100,
+  }) {
+    return adminNotificationsRef
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots();
+  }
+
   Future<void> markAdminNotificationsRead() async {
     final snap = await adminNotificationsRef
         .where('read', isEqualTo: false)
@@ -1024,13 +1033,14 @@ class FirebaseService {
 
   Future<LocalFaceMatch?> findNearestRemoteFace(
     List<double> embedding, {
-    double threshold = 1.2,
+    double threshold = 0.9,
+    double minimumMargin = 0.08,
   }) async {
     final snap = await firestore
         .collection('users')
         .where('hasFace', isEqualTo: true)
         .get();
-    LocalFaceMatch? best;
+    final matches = <LocalFaceMatch>[];
     for (final doc in snap.docs) {
       final data = doc.data();
       final raw = data['faceEmbedding'];
@@ -1041,15 +1051,23 @@ class FirebaseService {
           .toList(growable: false);
       if (stored.length != embedding.length) continue;
       final distance = _euclideanDistance(embedding, stored);
-      if (best == null || distance < best.distance) {
-        best = LocalFaceMatch(
-          userId: doc.id,
-          name: (data['name'] ?? '').toString(),
-          distance: distance,
+      if (distance.isFinite) {
+        matches.add(
+          LocalFaceMatch(
+            userId: doc.id,
+            name: (data['name'] ?? '').toString(),
+            distance: distance,
+          ),
         );
       }
     }
+    matches.sort((a, b) => a.distance.compareTo(b.distance));
+    final best = matches.isEmpty ? null : matches.first;
     if (best == null || best.distance > threshold) return null;
+    if (matches.length > 1 &&
+        matches[1].distance - best.distance < minimumMargin) {
+      return null;
+    }
     return best;
   }
 
@@ -1425,6 +1443,7 @@ class FirebaseService {
     if (active != null && active.areaId == area.id) return;
     final now = DateTime.now();
     final sessionId = '${user.id}_${now.microsecondsSinceEpoch}';
+    String? decrementAreaId;
     final entry = RoomAccessRecord(
       id: sessionId,
       sessionId: sessionId,
@@ -1455,10 +1474,11 @@ class FirebaseService {
           firestore.collection('areas').doc(active.areaId),
           {
             'allowedUserIds': FieldValue.arrayRemove([user.id]),
-            'currentOccupancy': FieldValue.increment(-1),
+            'updatedAt': FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
         );
+        decrementAreaId = active.areaId;
       }
     }
     batch.set(roomAccessRecordsRef.doc(entry.id), entry.toMap());
@@ -1483,6 +1503,9 @@ class FirebaseService {
       }, SetOptions(merge: true));
     }
     await batch.commit();
+    if (decrementAreaId != null) {
+      await _decrementAreaOccupancySafely(decrementAreaId);
+    }
   }
 
   Future<RoomSessionChange> recordRoomExit({
@@ -1525,11 +1548,11 @@ class FirebaseService {
     if (area.id.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(area.id), {
         'allowedUserIds': FieldValue.arrayRemove([user.id]),
-        'currentOccupancy': FieldValue.increment(-1),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
     await batch.commit();
+    await _decrementAreaOccupancySafely(area.id);
     return const RoomSessionChange(allowed: true);
   }
 
@@ -1555,11 +1578,11 @@ class FirebaseService {
     if (active.areaId.trim().isNotEmpty) {
       batch.set(firestore.collection('areas').doc(active.areaId), {
         'allowedUserIds': FieldValue.arrayRemove([user.id]),
-        'currentOccupancy': FieldValue.increment(-1),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
     await batch.commit();
+    await _decrementAreaOccupancySafely(active.areaId);
   }
 
   Future<void> signOut() => auth.signOut();
@@ -1836,6 +1859,21 @@ class FirebaseService {
     await firestore.collection('areas').doc(areaId).set({
       'currentOccupancy': FieldValue.increment(delta),
     }, SetOptions(merge: true));
+  }
+
+  Future<void> _decrementAreaOccupancySafely(String areaId) async {
+    final id = areaId.trim();
+    if (id.isEmpty) return;
+    final ref = firestore.collection('areas').doc(id);
+    await firestore.runTransaction((transaction) async {
+      final snap = await transaction.get(ref);
+      final data = snap.data();
+      final current = (data?['currentOccupancy'] as num?)?.toInt() ?? 0;
+      transaction.set(ref, {
+        'currentOccupancy': math.max(0, current - 1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
   }
 
   void _setUserSingleRoomAccessInBatch(
