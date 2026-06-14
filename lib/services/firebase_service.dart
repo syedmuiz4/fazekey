@@ -30,6 +30,8 @@ class RoomSessionChange {
 }
 
 class FirebaseService {
+  static const managedUserFallbackPassword = 'abcd1234';
+
   FirebaseService({FirebaseAuth? auth, FirebaseFirestore? firestore})
     : auth = auth ?? FirebaseAuth.instance,
       firestore = firestore ?? FirebaseFirestore.instance;
@@ -1244,30 +1246,41 @@ class FirebaseService {
     final area = areaData == null
         ? commandCenterAreas[request.areaId]
         : Area.fromMap(areaSnap.id, areaData);
+    var finalAllowed = allowed;
     if (allowed && user != null && area != null) {
       final now = DateTime.now();
       final endAt = user.accessValidUntil?.isAfter(now) == true
           ? user.accessValidUntil!
           : now.add(duration);
-      await grantRoomAccess(user: user, area: area, startAt: now, endAt: endAt);
-      await _activateApprovedRoomRequest(
+      final activation = await _activateApprovedRoomRequest(
         user: user,
         area: area,
         areaName: request.areaName.trim().isEmpty
             ? _areaRoomLabel(area)
             : request.areaName,
       );
+      finalAllowed = activation.allowed;
+      if (finalAllowed) {
+        await grantRoomAccess(
+          user: user,
+          area: area,
+          startAt: now,
+          endAt: endAt,
+        );
+      }
+    } else if (allowed) {
+      finalAllowed = false;
     }
     await roomAccessRequestsRef.doc(request.id).set({
-      'status': allowed ? 'allowed' : 'denied',
+      'status': finalAllowed ? 'allowed' : 'denied',
       'decidedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
     await _notifyUser(
       userId: request.userId,
-      title: 'Room request ${allowed ? 'approved' : 'denied'}',
-      message: allowed
+      title: 'Room request ${finalAllowed ? 'approved' : 'denied'}',
+      message: finalAllowed
           ? 'Your request to enter ${request.areaName} has been approved by admin.'
-          : 'Your request to enter ${request.areaName} was not approved by admin.',
+          : 'Your request to enter ${request.areaName} could not be approved because access is unavailable.',
       type: 'room',
     );
   }
@@ -1386,14 +1399,6 @@ class FirebaseService {
     required Area area,
     required String areaName,
   }) async {
-    final active = await getActiveRoomSession(user.id);
-    if (active != null) {
-      return RoomSessionChange(
-        allowed: false,
-        activeSession: active,
-        message: 'Locked: Current session active elsewhere',
-      );
-    }
     final now = DateTime.now();
     final sessionId = '${user.id}_${now.microsecondsSinceEpoch}';
     final record = RoomAccessRecord(
@@ -1407,43 +1412,81 @@ class FirebaseService {
       timestamp: now,
       reason: 'Biometric entry verified',
     );
-    final batch = firestore.batch();
-    batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
-    batch.set(activeRoomSessionsRef.doc(user.id), record.toMap());
+    final activeRef = activeRoomSessionsRef.doc(user.id);
+    final areaRef = firestore.collection('areas').doc(area.id);
+    final result = await firestore.runTransaction<RoomSessionChange>((
+      transaction,
+    ) async {
+      final activeSnap = await transaction.get(activeRef);
+      final activeData = activeSnap.data();
+      if (activeSnap.exists && activeData != null) {
+        final active = RoomAccessRecord.fromMap(activeSnap.id, activeData);
+        return RoomSessionChange(
+          allowed: false,
+          activeSession: active,
+          message: 'Locked: Current session active elsewhere',
+        );
+      }
+      final areaSnap = await transaction.get(areaRef);
+      final areaData = areaSnap.data();
+      if (!areaSnap.exists || areaData == null) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'Room is unavailable',
+        );
+      }
+      final latestArea = Area.fromMap(areaSnap.id, areaData);
+      if (!latestArea.active) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'Room access is off for maintenance',
+        );
+      }
+      if (latestArea.capacity > 0 &&
+          latestArea.currentOccupancy >= latestArea.capacity) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'Room is currently at full capacity',
+        );
+      }
+      final roomLabel = _normalizedRooms([
+        areaName.trim().isEmpty ? _areaRoomLabel(latestArea) : areaName,
+      ]);
+      transaction.set(roomAccessRecordsRef.doc(record.id), record.toMap());
+      transaction.set(activeRef, record.toMap());
+      transaction.set(userRef(user.id), {
+        'room': _primaryRoom(roomLabel),
+        'rooms': roomLabel,
+        'permittedZones': roomLabel,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      transaction.set(areaRef, {
+        'allowedUserIds': FieldValue.arrayUnion([user.id]),
+        'revokedUserIds': FieldValue.arrayRemove([user.id]),
+        'currentOccupancy': latestArea.currentOccupancy + 1,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return const RoomSessionChange(allowed: true);
+    });
+    if (!result.allowed) return result;
+    final grantBatch = firestore.batch();
     await _deactivateActiveRoomGrantsForUserInBatch(
-      batch,
+      grantBatch,
       user.id,
       exceptAreaId: area.id,
       removeAreaAccess: true,
     );
-    _setUserSingleRoomAccessInBatch(
-      batch,
-      userId: user.id,
-      area: area,
-      areaName: areaName,
-    );
-    if (area.id.trim().isNotEmpty) {
-      batch.set(firestore.collection('areas').doc(area.id), {
-        'allowedUserIds': FieldValue.arrayUnion([user.id]),
-        'revokedUserIds': FieldValue.arrayRemove([user.id]),
-        'currentOccupancy': FieldValue.increment(1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
-    await batch.commit();
-    return const RoomSessionChange(allowed: true);
+    await grantBatch.commit();
+    return result;
   }
 
-  Future<void> _activateApprovedRoomRequest({
+  Future<RoomSessionChange> _activateApprovedRoomRequest({
     required AppUser user,
     required Area area,
     required String areaName,
   }) async {
-    final active = await getActiveRoomSession(user.id);
-    if (active != null && active.areaId == area.id) return;
     final now = DateTime.now();
     final sessionId = '${user.id}_${now.microsecondsSinceEpoch}';
-    String? decrementAreaId;
     final entry = RoomAccessRecord(
       id: sessionId,
       sessionId: sessionId,
@@ -1455,57 +1498,111 @@ class FirebaseService {
       timestamp: now,
       reason: 'Admin-approved room request',
     );
-    final batch = firestore.batch();
-    if (active != null) {
-      final exit = RoomAccessRecord(
-        id: '${active.sessionId}_switch_${now.microsecondsSinceEpoch}',
-        sessionId: active.sessionId,
-        userId: active.userId,
-        userName: active.userName,
-        areaId: active.areaId,
-        areaName: active.areaName,
-        event: 'exit',
-        timestamp: now,
-        reason: 'Switched by approved room request',
-      );
-      batch.set(roomAccessRecordsRef.doc(exit.id), exit.toMap());
-      if (active.areaId.trim().isNotEmpty) {
-        batch.set(
-          firestore.collection('areas').doc(active.areaId),
-          {
-            'allowedUserIds': FieldValue.arrayRemove([user.id]),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
+    final activeRef = activeRoomSessionsRef.doc(user.id);
+    final areaRef = firestore.collection('areas').doc(area.id);
+    final result = await firestore.runTransaction<RoomSessionChange>((
+      transaction,
+    ) async {
+      final activeSnap = await transaction.get(activeRef);
+      final activeData = activeSnap.data();
+      final active = activeSnap.exists && activeData != null
+          ? RoomAccessRecord.fromMap(activeSnap.id, activeData)
+          : null;
+      if (active?.areaId == area.id) {
+        return RoomSessionChange(
+          allowed: true,
+          activeSession: active,
+          message: 'Room session is already active',
         );
-        decrementAreaId = active.areaId;
       }
-    }
-    batch.set(roomAccessRecordsRef.doc(entry.id), entry.toMap());
-    batch.set(activeRoomSessionsRef.doc(user.id), entry.toMap());
+      final areaSnap = await transaction.get(areaRef);
+      final areaData = areaSnap.data();
+      if (!areaSnap.exists || areaData == null) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'Room is unavailable',
+        );
+      }
+      final latestArea = Area.fromMap(areaSnap.id, areaData);
+      if (!latestArea.active) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'Room access is off for maintenance',
+        );
+      }
+      if (latestArea.capacity > 0 &&
+          latestArea.currentOccupancy >= latestArea.capacity) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'Room is currently at full capacity',
+        );
+      }
+      if (active != null) {
+        final oldAreaRef = firestore.collection('areas').doc(active.areaId);
+        final oldAreaSnap = await transaction.get(oldAreaRef);
+        final oldOccupancy =
+            (oldAreaSnap.data()?['currentOccupancy'] as num?)?.toInt() ?? 0;
+        final exit = RoomAccessRecord(
+          id: '${active.sessionId}_switch_${now.microsecondsSinceEpoch}',
+          sessionId: active.sessionId,
+          userId: active.userId,
+          userName: active.userName,
+          areaId: active.areaId,
+          areaName: active.areaName,
+          event: 'exit',
+          timestamp: now,
+          reason: 'Switched by approved room request',
+        );
+        transaction.set(roomAccessRecordsRef.doc(exit.id), exit.toMap());
+        transaction.set(oldAreaRef, {
+          'allowedUserIds': FieldValue.arrayRemove([user.id]),
+          'currentOccupancy': math.max(0, oldOccupancy - 1),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      final roomLabel = _normalizedRooms([
+        areaName.trim().isEmpty ? _areaRoomLabel(latestArea) : areaName,
+      ]);
+      transaction.set(roomAccessRecordsRef.doc(entry.id), entry.toMap());
+      transaction.set(activeRef, entry.toMap());
+      transaction.set(userRef(user.id), {
+        'room': _primaryRoom(roomLabel),
+        'rooms': roomLabel,
+        'permittedZones': roomLabel,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      transaction.set(areaRef, {
+        'allowedUserIds': FieldValue.arrayUnion([user.id]),
+        'revokedUserIds': FieldValue.arrayRemove([user.id]),
+        'currentOccupancy': latestArea.currentOccupancy + 1,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      final verifiedLog = AccessLog(
+        id: 'approved_$sessionId',
+        userId: user.id,
+        userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+        areaId: area.id,
+        areaName: areaName,
+        status: 'granted',
+        reason: 'Admin approved verified room entry',
+        timestamp: now,
+        synced: true,
+      );
+      transaction.set(
+        firestore.collection('accessLogs').doc(verifiedLog.id),
+        verifiedLog.toMap(),
+      );
+      return const RoomSessionChange(allowed: true);
+    });
+    if (!result.allowed) return result;
+    final grantBatch = firestore.batch();
     await _deactivateActiveRoomGrantsForUserInBatch(
-      batch,
+      grantBatch,
       user.id,
       exceptAreaId: area.id,
     );
-    _setUserSingleRoomAccessInBatch(
-      batch,
-      userId: user.id,
-      area: area,
-      areaName: areaName,
-    );
-    if (area.id.trim().isNotEmpty) {
-      batch.set(firestore.collection('areas').doc(area.id), {
-        'allowedUserIds': FieldValue.arrayUnion([user.id]),
-        'revokedUserIds': FieldValue.arrayRemove([user.id]),
-        'currentOccupancy': FieldValue.increment(1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
-    await batch.commit();
-    if (decrementAreaId != null) {
-      await _decrementAreaOccupancySafely(decrementAreaId);
-    }
+    await grantBatch.commit();
+    return result;
   }
 
   Future<RoomSessionChange> recordRoomExit({
@@ -1514,75 +1611,94 @@ class FirebaseService {
     required String areaName,
     String reason = 'Biometric exit verified',
   }) async {
-    final active = await getActiveRoomSession(user.id);
-    if (active == null) {
-      return const RoomSessionChange(
-        allowed: false,
-        message: 'No active room session found',
-      );
-    }
-    if (active.areaId != area.id) {
-      return RoomSessionChange(
-        allowed: false,
-        activeSession: active,
-        message: 'Locked: Current session active elsewhere',
-      );
-    }
     final now = DateTime.now();
-    final recordId = '${active.sessionId}_exit_${now.microsecondsSinceEpoch}';
-    final record = RoomAccessRecord(
-      id: recordId,
-      sessionId: active.sessionId,
-      userId: user.id,
-      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
-      areaId: area.id,
-      areaName: areaName,
-      event: 'exit',
-      timestamp: now,
-      reason: reason,
-    );
-    final batch = firestore.batch();
-    batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
-    batch.delete(activeRoomSessionsRef.doc(user.id));
-    _clearUserRoomAccessInBatch(batch, userId: user.id);
-    if (area.id.trim().isNotEmpty) {
-      batch.set(firestore.collection('areas').doc(area.id), {
-        'allowedUserIds': FieldValue.arrayRemove([user.id]),
+    final activeRef = activeRoomSessionsRef.doc(user.id);
+    return firestore.runTransaction<RoomSessionChange>((transaction) async {
+      final activeSnap = await transaction.get(activeRef);
+      final activeData = activeSnap.data();
+      if (!activeSnap.exists || activeData == null) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'No active room session found',
+        );
+      }
+      final active = RoomAccessRecord.fromMap(activeSnap.id, activeData);
+      if (active.areaId != area.id) {
+        return RoomSessionChange(
+          allowed: false,
+          activeSession: active,
+          message: 'Locked: Current session active elsewhere',
+        );
+      }
+      final areaRef = firestore.collection('areas').doc(active.areaId);
+      final areaSnap = await transaction.get(areaRef);
+      final occupancy =
+          (areaSnap.data()?['currentOccupancy'] as num?)?.toInt() ?? 0;
+      final record = RoomAccessRecord(
+        id: '${active.sessionId}_exit_${now.microsecondsSinceEpoch}',
+        sessionId: active.sessionId,
+        userId: user.id,
+        userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+        areaId: active.areaId,
+        areaName: active.areaName.trim().isEmpty ? areaName : active.areaName,
+        event: 'exit',
+        timestamp: now,
+        reason: reason,
+      );
+      transaction.set(roomAccessRecordsRef.doc(record.id), record.toMap());
+      transaction.delete(activeRef);
+      transaction.set(userRef(user.id), {
+        'room': '',
+        'rooms': const <String>[],
+        'permittedZones': const <String>[],
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-    }
-    await batch.commit();
-    await _decrementAreaOccupancySafely(area.id);
-    return const RoomSessionChange(allowed: true);
+      transaction.set(areaRef, {
+        'allowedUserIds': FieldValue.arrayRemove([user.id]),
+        'currentOccupancy': math.max(0, occupancy - 1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return const RoomSessionChange(allowed: true);
+    });
   }
 
   Future<void> closeActiveRoomSessionForUser(AppUser user) async {
-    final active = await getActiveRoomSession(user.id);
-    if (active == null) return;
     final now = DateTime.now();
-    final record = RoomAccessRecord(
-      id: '${active.sessionId}_logout_${now.microsecondsSinceEpoch}',
-      sessionId: active.sessionId,
-      userId: user.id,
-      userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
-      areaId: active.areaId,
-      areaName: active.areaName,
-      event: 'exit',
-      timestamp: now,
-      reason: 'Application logout closed active room session',
-    );
-    final batch = firestore.batch();
-    batch.set(roomAccessRecordsRef.doc(record.id), record.toMap());
-    batch.delete(activeRoomSessionsRef.doc(user.id));
-    _clearUserRoomAccessInBatch(batch, userId: user.id);
-    if (active.areaId.trim().isNotEmpty) {
-      batch.set(firestore.collection('areas').doc(active.areaId), {
-        'allowedUserIds': FieldValue.arrayRemove([user.id]),
+    final activeRef = activeRoomSessionsRef.doc(user.id);
+    await firestore.runTransaction<void>((transaction) async {
+      final activeSnap = await transaction.get(activeRef);
+      final activeData = activeSnap.data();
+      if (!activeSnap.exists || activeData == null) return;
+      final active = RoomAccessRecord.fromMap(activeSnap.id, activeData);
+      final areaRef = firestore.collection('areas').doc(active.areaId);
+      final areaSnap = await transaction.get(areaRef);
+      final occupancy =
+          (areaSnap.data()?['currentOccupancy'] as num?)?.toInt() ?? 0;
+      final record = RoomAccessRecord(
+        id: '${active.sessionId}_logout_${now.microsecondsSinceEpoch}',
+        sessionId: active.sessionId,
+        userId: user.id,
+        userName: user.name.trim().isEmpty ? user.id : user.name.trim(),
+        areaId: active.areaId,
+        areaName: active.areaName,
+        event: 'exit',
+        timestamp: now,
+        reason: 'Application logout closed active room session',
+      );
+      transaction.set(roomAccessRecordsRef.doc(record.id), record.toMap());
+      transaction.delete(activeRef);
+      transaction.set(userRef(user.id), {
+        'room': '',
+        'rooms': const <String>[],
+        'permittedZones': const <String>[],
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-    }
-    await batch.commit();
-    await _decrementAreaOccupancySafely(active.areaId);
+      transaction.set(areaRef, {
+        'allowedUserIds': FieldValue.arrayRemove([user.id]),
+        'currentOccupancy': math.max(0, occupancy - 1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    });
   }
 
   Future<void> signOut() => auth.signOut();
@@ -1744,7 +1860,7 @@ class FirebaseService {
         'Welcome to FAZEKEY. Your account has been successfully registered. Please use the following credentials for your initial login:\r\n\r\n'
         'Email: $target\r\n\r\n'
         'Temporary Password: $cleanTemporaryPassword\r\n\r\n'
-        'Note: For security purposes, this password will expire in 24 hours. Upon logging in, you will be required to create a new, secure password and set up your biometric profile.\r\n\r\n'
+        'Note: For security purposes, this password will expire in 30 minutes. Upon logging in, you will be required to create a new, secure password and set up your biometric profile.\r\n\r\n'
         'If you require assistance, please contact us at $supportEmail.\r\n\r\n'
         'Best regards,\r\n\r\n'
         'The FAZEKEY Security Team.';
@@ -1799,15 +1915,47 @@ class FirebaseService {
       firestore.collection('areas').doc(id).delete();
 
   Future<void> ensureSampleAreas() async {
+    final areasRef = firestore.collection('areas');
+    final existing = await areasRef.get();
+    final existingIds = existing.docs.map((doc) => doc.id).toSet();
     final batch = firestore.batch();
+    var hasMissingArea = false;
     for (final entry in commandCenterAreas.entries) {
-      batch.set(
-        firestore.collection('areas').doc(entry.key),
-        entry.value.toMap(),
-        SetOptions(merge: true),
+      if (existingIds.contains(entry.key)) continue;
+      hasMissingArea = true;
+      batch.set(areasRef.doc(entry.key), entry.value.toMap());
+    }
+    if (!hasMissingArea) return;
+    await batch.commit();
+  }
+
+  Future<void> reconcileRoomOccupancy() async {
+    await ensureSampleAreas();
+    final sessions = await activeRoomSessionsRef.get();
+    final occupancyByArea = <String, int>{};
+    for (final doc in sessions.docs) {
+      final areaId = (doc.data()['areaId'] ?? '').toString().trim();
+      if (areaId.isEmpty) continue;
+      occupancyByArea.update(
+        areaId,
+        (currentCount) => currentCount + 1,
+        ifAbsent: () => 1,
       );
     }
-    await batch.commit();
+    final areas = await firestore.collection('areas').get();
+    final batch = firestore.batch();
+    var hasChanges = false;
+    for (final doc in areas.docs) {
+      final expected = occupancyByArea[doc.id] ?? 0;
+      final current = (doc.data()['currentOccupancy'] as num?)?.toInt() ?? 0;
+      if (current == expected) continue;
+      hasChanges = true;
+      batch.set(doc.reference, {
+        'currentOccupancy': expected,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    if (hasChanges) await batch.commit();
   }
 
   Future<void> updateArea(Area area) async {
@@ -1818,8 +1966,12 @@ class FirebaseService {
         : null;
     final oldRoomLabel = previous == null ? '' : _areaRoomLabel(previous);
     final newRoomLabel = _areaRoomLabel(area);
+    final areaData = area.toMap();
+    if (previous != null) {
+      areaData['currentOccupancy'] = previous.currentOccupancy;
+    }
     final batch = firestore.batch()
-      ..set(areaRef, area.toMap(), SetOptions(merge: true));
+      ..set(areaRef, areaData, SetOptions(merge: true));
 
     if (previous != null &&
         oldRoomLabel.trim().isNotEmpty &&
@@ -1855,13 +2007,6 @@ class FirebaseService {
   }
 
   Future<void> updateAreaOccupancy(String areaId, int delta) async {
-    if (areaId.isEmpty) return;
-    await firestore.collection('areas').doc(areaId).set({
-      'currentOccupancy': FieldValue.increment(delta),
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> _decrementAreaOccupancySafely(String areaId) async {
     final id = areaId.trim();
     if (id.isEmpty) return;
     final ref = firestore.collection('areas').doc(id);
@@ -1870,7 +2015,7 @@ class FirebaseService {
       final data = snap.data();
       final current = (data?['currentOccupancy'] as num?)?.toInt() ?? 0;
       transaction.set(ref, {
-        'currentOccupancy': math.max(0, current - 1),
+        'currentOccupancy': math.max(0, current + delta),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
@@ -1891,15 +2036,6 @@ class FirebaseService {
       'rooms': roomLabel,
       'permittedZones': roomLabel,
       ...extraUserFields,
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
-  void _clearUserRoomAccessInBatch(WriteBatch batch, {required String userId}) {
-    batch.set(userRef(userId), {
-      'room': '',
-      'rooms': const <String>[],
-      'permittedZones': const <String>[],
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }

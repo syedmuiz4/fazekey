@@ -648,6 +648,10 @@ class _CurrentRoomCardState extends State<_CurrentRoomCard> {
               builder: (context, snapshot) {
                 final record = snapshot.data;
                 final accessRoom = record?.areaName;
+                final currentArea = record == null
+                    ? null
+                    : _findAreaForRecord(areas, record);
+                final roomActive = currentArea?.active ?? true;
                 return _Panel(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -673,10 +677,14 @@ class _CurrentRoomCardState extends State<_CurrentRoomCard> {
                         Row(
                           children: [
                             Icon(
-                              record == null
+                              !roomActive
+                                  ? Icons.lock_rounded
+                                  : record == null
                                   ? Icons.meeting_room_rounded
                                   : Icons.check_circle_rounded,
-                              color: const Color(0xFF16A34A),
+                              color: roomActive
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFFE11D48),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
@@ -694,7 +702,9 @@ class _CurrentRoomCardState extends State<_CurrentRoomCard> {
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          record == null
+                          !roomActive
+                              ? 'Room access is off for maintenance'
+                              : record == null
                               ? widget.text.accessReady
                               : '${widget.text.checkedIn}: ${DateFormat.yMMMd().add_jm().format(record.timestamp)}',
                           style: const TextStyle(
@@ -983,7 +993,10 @@ class _RoomCapacityRow extends StatelessWidget {
     final currentArea = area;
     final capacity = currentArea?.capacity ?? 0;
     final occupied = (currentArea?.currentOccupancy ?? 0).clamp(0, capacity);
-    final label = capacity <= 0
+    final active = currentArea?.active ?? true;
+    final label = !active
+        ? 'Off for maintenance'
+        : capacity <= 0
         ? 'Capacity available'
         : '$occupied / $capacity occupied';
     return DecoratedBox(
@@ -996,7 +1009,10 @@ class _RoomCapacityRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           children: [
-            const Icon(Icons.meeting_room_rounded, color: Color(0xFF0D9488)),
+            Icon(
+              active ? Icons.meeting_room_rounded : Icons.lock_rounded,
+              color: active ? const Color(0xFF0D9488) : const Color(0xFFE11D48),
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -1026,22 +1042,33 @@ DateTime? _latestGrantExpiry(List<AccessGrant> grants) {
 }
 
 List<String> _availableRoomNames(List<Area> areas, List<AccessGrant> grants) {
-  final activeAreas = areas.where((area) => area.active).toList();
+  final availableAreas = areas.toList();
   final grantedKeys = grants.map((grant) => _accessKey(grant.areaName)).toSet();
-  activeAreas.sort((a, b) {
+  availableAreas.sort((a, b) {
+    if (a.active != b.active) return a.active ? -1 : 1;
     final aGranted = grantedKeys.contains(_accessKey(_areaDisplay(a)));
     final bGranted = grantedKeys.contains(_accessKey(_areaDisplay(b)));
     if (aGranted != bGranted) return aGranted ? -1 : 1;
     return _areaDisplay(a).compareTo(_areaDisplay(b));
   });
   final rooms = <String>[];
-  for (final area in activeAreas) {
+  for (final area in availableAreas) {
     final label = _areaDisplay(area);
     if (label.trim().isEmpty) continue;
     if (rooms.any((room) => _accessKey(room) == _accessKey(label))) continue;
     rooms.add(label);
   }
   return rooms;
+}
+
+Area? _findAreaForRecord(List<Area> areas, RoomAccessRecord record) {
+  for (final area in areas) {
+    if (area.id == record.areaId ||
+        _areaRoomKeys(area).contains(_accessKey(record.areaName))) {
+      return area;
+    }
+  }
+  return null;
 }
 
 String _accessKey(String value) =>

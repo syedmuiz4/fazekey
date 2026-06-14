@@ -57,7 +57,7 @@ class LogProvider extends ChangeNotifier {
   }
 
   Future<void> record(AccessLog log, {bool firestoreLogging = true}) async {
-    if (!firestoreLogging) return;
+    if (!firestoreLogging && !log.granted) return;
     try {
       await _firebase.addLog(log);
     } catch (e) {

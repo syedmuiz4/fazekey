@@ -64,10 +64,41 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
     if (enterRoom != true || !mounted) return;
-    await _showRoomSelection();
+    await _showRoomSelection(chooseLoginType: false);
   }
 
-  Future<void> _showRoomSelection() async {
+  Future<void> _showRoomSelection({bool chooseLoginType = true}) async {
+    if (chooseLoginType) {
+      final loginType = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Face Login'),
+          content: const Text('Choose how you want to continue.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'user'),
+              child: const Text('User Room Entry'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, 'admin'),
+              child: const Text('Admin Login'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || loginType == null) return;
+      if (loginType == 'admin') {
+        Navigator.of(context).pushNamed(
+          FaceLoginScreen.route,
+          arguments: const {'adminLogin': true},
+        );
+        return;
+      }
+    }
     final firebase = context.read<FirebaseService>();
     final snapshot = await firebase.firestore.collection('areas').get();
     final rooms =
@@ -222,9 +253,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                     borderRadius: BorderRadius.circular(25),
                                   ),
                                 ),
-                                onPressed: () => Navigator.of(
-                                  context,
-                                ).pushNamed(FaceLoginScreen.route),
+                                onPressed: _showRoomSelection,
                                 child: const Text(
                                   'Login with Face',
                                   style: TextStyle(fontWeight: FontWeight.w900),

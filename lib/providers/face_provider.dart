@@ -227,7 +227,7 @@ class FaceProvider extends ChangeNotifier {
       userId: user?.id ?? '',
       userName: user?.name ?? 'Unknown face',
       areaId: area?.id ?? areaId,
-      areaName: area?.name ?? areaName,
+      areaName: areaName,
       status: normalizedStatus,
       reason: granted
           ? (reason ?? 'Face verified offline')

@@ -108,6 +108,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     final firebase = context.read<FirebaseService>();
     final sessionAction = _scannerSessionAction();
     final appLoginOnly = _isAppFaceLogin();
+    final adminLoginOnly = _isAdminFaceLogin();
     final scanRoomName = _scannerRoomDisplayLabel();
     AccessLog? pendingResultLog;
 
@@ -141,7 +142,10 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       final user = await faceProvider.resolveLocalMatch(localMatch);
 
       if (appLoginOnly) {
-        if (user == null || !user.isApproved || !user.hasFace) {
+        if (user == null ||
+            !user.isApproved ||
+            !user.hasFace ||
+            (adminLoginOnly && !user.isAdmin)) {
           final log = faceProvider.buildLog(
             user: user,
             area: scanArea,
@@ -151,6 +155,8 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
                 ? 'Face not recognized'
                 : !user.hasFace
                 ? 'Face profile is not enrolled'
+                : adminLoginOnly && !user.isAdmin
+                ? 'Administrator account required'
                 : 'Account needs admin review',
             snapshotPath: snapshotPath,
           );
@@ -163,6 +169,14 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           _replaceWithAccessResult(user: null, log: log);
           return;
         }
+        final verifiedLog = faceProvider.buildLog(
+          user: user,
+          area: scanArea,
+          areaName: 'Application Face Login',
+          status: 'granted',
+          reason: 'Face identity verified for application login',
+        );
+        await logProvider.record(verifiedLog);
         authProvider.completeFaceLogin(user);
         unawaited(
           firebase
@@ -170,7 +184,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
               .catchError((_) {}),
         );
         if (!mounted) return;
-        await _showSuccessAndNavigate(user);
+        await _showSuccessAndNavigate(user, log: verifiedLog);
         return;
       }
 
@@ -244,11 +258,18 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           user != null &&
           (user.isRegisteredForArea(scanArea) ||
               grantEvaluation?.granted == true);
+      final approvedGrantAllowed =
+          user != null &&
+          grantEvaluation?.granted == true &&
+          scanArea.active &&
+          !scanArea.revokedUserIds.contains(user.id) &&
+          (scanArea.capacity <= 0 ||
+              scanArea.currentOccupancy < scanArea.capacity);
       final areaAllowed =
           user != null &&
           verifiedArea != null &&
           registeredForScanner &&
-          user.canAccessArea(scanArea);
+          (approvedGrantAllowed || user.canAccessArea(scanArea));
       final temporalAllowed = !timingDenied;
       var hasAccess =
           user != null &&
@@ -262,6 +283,17 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         if (activeSession != null) {
           hasAccess = false;
           lockReason = 'Locked: Current session active elsewhere';
+        }
+      }
+      if (hasAccess) {
+        final entryChange = await firebase.recordRoomEntry(
+          user: user!,
+          area: scanArea,
+          areaName: scanRoomName,
+        );
+        if (!entryChange.allowed) {
+          hasAccess = false;
+          lockReason = entryChange.message;
         }
       }
       final reason = user == null
@@ -338,28 +370,6 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       }
       if (hasAccess) {
         final verifiedUser = user!;
-        final entryChange = await firebase.recordRoomEntry(
-          user: verifiedUser,
-          area: scanArea,
-          areaName: scanRoomName,
-        );
-        if (!entryChange.allowed) {
-          final lockedLog = faceProvider.buildLog(
-            user: verifiedUser,
-            area: scanArea,
-            areaName: scanRoomName,
-            status: 'locked',
-            reason: entryChange.message,
-            snapshotPath: snapshotPath,
-          );
-          await logProvider.record(
-            lockedLog,
-            firestoreLogging: system.monitoringWindowLogging,
-          );
-          if (!mounted) return;
-          _replaceWithAccessResult(user: null, log: lockedLog);
-          return;
-        }
         authProvider.completeFaceLogin(verifiedUser);
         unawaited(
           firebase
@@ -456,10 +466,9 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
 
   Area _activeAreaFromProvider() {
     final areas = context.read<AreaProvider>().areas;
-    final active = areas.where((area) => area.active).toList();
     final scannerRoomId = _scannerRoomIdFromRoute();
     if (scannerRoomId != null) {
-      for (final area in active) {
+      for (final area in areas) {
         if (area.id == scannerRoomId ||
             _triNormalize(area.roomNumber) == _triNormalize(scannerRoomId) ||
             _triNormalize(_areaName(area)) == _triNormalize(scannerRoomId)) {
@@ -467,6 +476,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
         }
       }
     }
+    final active = areas.where((area) => area.active).toList();
     for (final area in active) {
       if (_isRecognizedScannerRoom(area, _serverRoomName)) return area;
     }
@@ -533,6 +543,11 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
       );
     }
     return false;
+  }
+
+  bool _isAdminFaceLogin() {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    return args is Map<String, dynamic> && args['adminLogin'] == true;
   }
 
   String _triNormalize(String value) =>

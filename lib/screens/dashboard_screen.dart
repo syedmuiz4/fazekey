@@ -97,6 +97,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AreaProvider>().listen();
+      unawaited(
+        context.read<FirebaseService>().reconcileRoomOccupancy().catchError(
+          (_) {},
+        ),
+      );
       final logs = context.read<LogProvider>();
       logs.listen();
       unawaited(logs.syncPending());
@@ -947,92 +952,112 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
                 );
               }
             }
-            final filtered = _filteredUsers(users);
-            return ListView(
-              padding: const EdgeInsets.all(18),
-              children: [
-                _NewRegistrationCard(
-                  areas: areas,
-                  expanded: _registrationOpen,
-                  onToggle: () =>
-                      setState(() => _registrationOpen = !_registrationOpen),
-                ),
-                const SizedBox(height: 12),
-                Row(
+            return StreamBuilder<List<RoomAccessRecord>>(
+              stream: firebase.watchActiveRoomSessions(),
+              builder: (context, sessionSnapshot) {
+                final activeSessions =
+                    sessionSnapshot.data ?? const <RoomAccessRecord>[];
+                final activeSessionsByUser = {
+                  for (final session in activeSessions) session.userId: session,
+                };
+                final filtered = _filteredUsers(users);
+                return ListView(
+                  padding: const EdgeInsets.all(18),
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _search,
-                        decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.search_rounded),
-                          hintText: 'Search identities',
-                        ),
-                        onChanged: (_) => setState(() {}),
+                    _NewRegistrationCard(
+                      areas: areas,
+                      expanded: _registrationOpen,
+                      onToggle: () => setState(
+                        () => _registrationOpen = !_registrationOpen,
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _DirectoryFilterChip(
-                      label: 'All',
-                      selected: widget.mode == _DirectoryMode.all,
-                      onTap: () => widget.onModeChanged(_DirectoryMode.all),
-                    ),
-                    _DirectoryFilterChip(
-                      label: 'Pending',
-                      selected: widget.mode == _DirectoryMode.pendingReview,
-                      onTap: () =>
-                          widget.onModeChanged(_DirectoryMode.pendingReview),
-                    ),
-                    _DirectoryFilterChip(
-                      label: 'Staff',
-                      selected: widget.mode == _DirectoryMode.staff,
-                      onTap: () => widget.onModeChanged(_DirectoryMode.staff),
-                    ),
-                    _DirectoryFilterChip(
-                      label: 'Students',
-                      selected: widget.mode == _DirectoryMode.students,
-                      onTap: () =>
-                          widget.onModeChanged(_DirectoryMode.students),
-                    ),
-                  ],
-                ),
-                if (userSnapshot.hasError || grantSnapshot.hasError) ...[
-                  const SizedBox(height: 12),
-                  _InlineError(
-                    message:
-                        'Directory sync is temporarily unavailable. Existing records remain visible when cached.',
-                  ),
-                ],
-                const SizedBox(height: 12),
-                if (filtered.isEmpty)
-                  const _EmptyState(
-                    icon: Icons.badge_rounded,
-                    title: 'No identities found',
-                  )
-                else
-                  for (final user in filtered)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _UserDirectoryCard(
-                        user: user,
-                        permissionCount: math.max(
-                          user.assignedRooms.length,
-                          grantsByUser[user.id] ?? 0,
-                        ),
-                        onView: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => _UserDeepDetailPage(user: user),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _search,
+                            decoration: const InputDecoration(
+                              prefixIcon: Icon(Icons.search_rounded),
+                              hintText: 'Search identities',
+                            ),
+                            onChanged: (_) => setState(() {}),
                           ),
                         ),
-                        onEdit: () => _openEditPanel(context, user, areas),
-                      ),
+                      ],
                     ),
-              ],
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _DirectoryFilterChip(
+                          label: 'All',
+                          selected: widget.mode == _DirectoryMode.all,
+                          onTap: () => widget.onModeChanged(_DirectoryMode.all),
+                        ),
+                        _DirectoryFilterChip(
+                          label: 'Pending',
+                          selected: widget.mode == _DirectoryMode.pendingReview,
+                          onTap: () => widget.onModeChanged(
+                            _DirectoryMode.pendingReview,
+                          ),
+                        ),
+                        _DirectoryFilterChip(
+                          label: 'Staff',
+                          selected: widget.mode == _DirectoryMode.staff,
+                          onTap: () =>
+                              widget.onModeChanged(_DirectoryMode.staff),
+                        ),
+                        _DirectoryFilterChip(
+                          label: 'Students',
+                          selected: widget.mode == _DirectoryMode.students,
+                          onTap: () =>
+                              widget.onModeChanged(_DirectoryMode.students),
+                        ),
+                      ],
+                    ),
+                    if (userSnapshot.hasError ||
+                        grantSnapshot.hasError ||
+                        sessionSnapshot.hasError) ...[
+                      const SizedBox(height: 12),
+                      _InlineError(
+                        message:
+                            'Directory sync is temporarily unavailable. Existing records remain visible when cached.',
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    if (filtered.isEmpty)
+                      const _EmptyState(
+                        icon: Icons.badge_rounded,
+                        title: 'No identities found',
+                      )
+                    else
+                      for (final user in filtered)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _UserDirectoryCard(
+                            user: user,
+                            permissionCount: math.max(
+                              user.assignedRooms.length,
+                              grantsByUser[user.id] ?? 0,
+                            ),
+                            activeSession: activeSessionsByUser[user.id],
+                            activeRoomAvailable: _activeSessionRoomAvailable(
+                              areas,
+                              activeSessionsByUser[user.id],
+                            ),
+                            onView: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => _UserDeepDetailPage(user: user),
+                              ),
+                            ),
+                            onEdit: () => _openEditPanel(context, user, areas),
+                          ),
+                        ),
+                  ],
+                );
+              },
             );
           },
         );
@@ -1139,13 +1164,18 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
       );
       return;
     }
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          'Temporary password is only available immediately after registration. Use the registration confirmation panel to send it to $email.',
-        ),
-      ),
-    );
+    try {
+      await context.read<FirebaseService>().sendTemporaryPasswordSetupEmail(
+        user,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Password setup email sent to $email.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text(e.toString())));
+    }
   }
 
   Future<void> _deleteUser(BuildContext context, AppUser user) async {
@@ -1626,10 +1656,7 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
       value == null || value.trim().isEmpty ? 'Required' : null;
 
   String _generateTemporaryPassword() {
-    const alphabet =
-        'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#%';
-    final random = math.Random.secure();
-    return 'fx_${List.generate(10, (_) => alphabet[random.nextInt(alphabet.length)]).join()}';
+    return FirebaseService.managedUserFallbackPassword;
   }
 }
 
@@ -1926,12 +1953,16 @@ class _UserDirectoryCard extends StatelessWidget {
   const _UserDirectoryCard({
     required this.user,
     required this.permissionCount,
+    required this.activeSession,
+    required this.activeRoomAvailable,
     required this.onView,
     required this.onEdit,
   });
 
   final AppUser user;
   final int permissionCount;
+  final RoomAccessRecord? activeSession;
+  final bool? activeRoomAvailable;
   final VoidCallback onView;
   final VoidCallback onEdit;
 
@@ -2015,8 +2046,14 @@ class _UserDirectoryCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: _DirectoryInfo(
-                  label: 'Rooms',
-                  value: '$permissionCount assigned',
+                  label: 'Current Room',
+                  value: activeSession == null
+                      ? (permissionCount == 0
+                            ? 'Not in any room'
+                            : 'Not in room ($permissionCount registered)')
+                      : activeRoomAvailable == false
+                      ? '${activeSession!.areaName} (Access off)'
+                      : activeSession!.areaName,
                 ),
               ),
             ],
@@ -3979,16 +4016,9 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<LogProvider>();
-    final sourceLogs = provider.logs.isEmpty
-        ? _sampleAccessLogs()
-        : provider.logs;
+    final sourceLogs = provider.logs;
     final roomOptions = _roomOptions(sourceLogs);
     final filteredLogs = _filtered(sourceLogs);
-    final roomActivityLogs = _filtered(
-      sourceLogs,
-      includeStatus: false,
-      includeQuery: false,
-    );
     final visibleLogs = filteredLogs.take(widget.initialLimit).toList();
     final grantedCount = filteredLogs.where((log) => log.granted).length;
     final deniedCount = filteredLogs.length - grantedCount;
@@ -4146,7 +4176,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
               return Column(
                 children: [
                   _AccessLogPanel(
-                    child: _RoomActivityDistribution(logs: roomActivityLogs),
+                    child: _RoomActivityDistribution(records: records),
                   ),
                   const SizedBox(height: 12),
                   _AccessLogPanel(
@@ -4403,65 +4433,45 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
       _period = 'all';
     });
   }
-
-  List<AccessLog> _sampleAccessLogs() {
-    final now = DateTime.now();
-    return [
-      AccessLog(
-        id: 'sample_granted',
-        userId: 'sample_daniel',
-        userName: 'daniel',
-        areaId: 'server_room',
-        areaName: 'Server Room',
-        status: 'granted',
-        reason: 'Sample verified entry',
-        timestamp: now.subtract(const Duration(minutes: 12)),
-        synced: true,
-      ),
-      AccessLog(
-        id: 'sample_denied',
-        userId: '',
-        userName: 'Unknown face',
-        areaId: 'server_room',
-        areaName: 'Server Room',
-        status: 'denied',
-        reason: 'Sample denied entry',
-        timestamp: now.subtract(const Duration(minutes: 4)),
-        synced: true,
-      ),
-    ];
-  }
 }
 
 class _RoomActivityDistribution extends StatelessWidget {
-  const _RoomActivityDistribution({required this.logs});
+  const _RoomActivityDistribution({required this.records});
 
-  final List<AccessLog> logs;
+  final List<RoomAccessRecord> records;
 
   @override
   Widget build(BuildContext context) {
     final counts = <String, _RoomActivityCount>{};
-    for (final log in logs) {
-      final room = log.areaName.trim().isEmpty
+    for (final record in records.where((record) => record.isEntry)) {
+      final room = record.areaName.trim().isEmpty
           ? 'Unknown room'
-          : log.areaName.trim();
+          : record.areaName.trim();
       final count = counts.putIfAbsent(room, _RoomActivityCount.new);
-      final userName = _logUserName(log);
+      final userName = record.userName.trim().isEmpty
+          ? 'Unknown user'
+          : record.userName.trim();
       count.users[userName] = (count.users[userName] ?? 0) + 1;
-      count.statuses[log.status] = (count.statuses[log.status] ?? 0) + 1;
-      if (log.granted) {
-        count.granted++;
-      } else {
-        count.denied++;
-      }
+      count.entries++;
+      count.latestEntry =
+          count.latestEntry == null ||
+              record.timestamp.isAfter(count.latestEntry!)
+          ? record.timestamp
+          : count.latestEntry;
     }
     final entries = counts.entries.toList()
       ..sort((a, b) => b.value.total.compareTo(a.value.total));
     final visible = entries.take(6).toList();
     final maxCount = visible.isEmpty
         ? 1.0
-        : visible.map((entry) => entry.value.total).reduce(math.max).toDouble();
-    final totalActivity = visible.fold<int>(
+        : visible
+              .map(
+                (entry) =>
+                    math.max(entry.value.entries, entry.value.users.length),
+              )
+              .reduce(math.max)
+              .toDouble();
+    final totalActivity = entries.fold<int>(
       0,
       (total, entry) => total + entry.value.total,
     );
@@ -4491,11 +4501,11 @@ class _RoomActivityDistribution extends StatelessWidget {
           spacing: 12,
           runSpacing: 8,
           children: [
-            _ChartLegend(color: const Color(0xFF0D9488), label: 'Granted'),
-            _ChartLegend(color: const Color(0xFFE11D48), label: 'Denied'),
+            _ChartLegend(color: const Color(0xFF0D9488), label: 'Room entries'),
+            _ChartLegend(color: const Color(0xFF2563EB), label: 'Unique users'),
             Chip(
               avatar: const Icon(Icons.timeline_rounded, size: 18),
-              label: Text('Total: $totalActivity'),
+              label: Text('Successful entries: $totalActivity'),
             ),
           ],
         ),
@@ -4517,7 +4527,7 @@ class _RoomActivityDistribution extends StatelessWidget {
                     getTooltipItem: (group, groupIndex, rod, rodIndex) {
                       final entry = visible[group.x.toInt()];
                       return BarTooltipItem(
-                        '${entry.key}\nGranted: ${entry.value.granted}\nDenied: ${entry.value.denied}',
+                        '${entry.key}\nEntries: ${entry.value.entries}\nUsers: ${entry.value.users.length}',
                         const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w900,
@@ -4577,21 +4587,16 @@ class _RoomActivityDistribution extends StatelessWidget {
                       x: i,
                       barRods: [
                         BarChartRodData(
-                          toY: visible[i].value.total.toDouble(),
-                          width: 22,
+                          toY: visible[i].value.entries.toDouble(),
+                          width: 14,
                           borderRadius: BorderRadius.circular(4),
-                          rodStackItems: [
-                            BarChartRodStackItem(
-                              0,
-                              visible[i].value.granted.toDouble(),
-                              const Color(0xFF0D9488),
-                            ),
-                            BarChartRodStackItem(
-                              visible[i].value.granted.toDouble(),
-                              visible[i].value.total.toDouble(),
-                              const Color(0xFFE11D48),
-                            ),
-                          ],
+                          color: const Color(0xFF0D9488),
+                        ),
+                        BarChartRodData(
+                          toY: visible[i].value.users.length.toDouble(),
+                          width: 14,
+                          borderRadius: BorderRadius.circular(4),
+                          color: const Color(0xFF2563EB),
                         ),
                       ],
                     ),
@@ -4613,11 +4618,10 @@ class _RoomActivityDistribution extends StatelessWidget {
 }
 
 class _RoomActivityCount {
-  int granted = 0;
-  int denied = 0;
+  int entries = 0;
   final Map<String, int> users = {};
-  final Map<String, int> statuses = {};
-  int get total => granted + denied;
+  DateTime? latestEntry;
+  int get total => entries;
 }
 
 class _RoomActivityDetail extends StatelessWidget {
@@ -4629,8 +4633,6 @@ class _RoomActivityDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final users = count.users.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final statuses = count.statuses.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -4646,17 +4648,27 @@ class _RoomActivityDetail extends StatelessWidget {
             Text(room, style: const TextStyle(fontWeight: FontWeight.w900)),
             const SizedBox(height: 4),
             Text(
-              'Users: ${users.map((entry) => '${entry.key} (${entry.value})').join(', ')}',
+              'Successful entries: ${count.entries} | Unique users: ${users.length}',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 3),
             Text(
-              'Status: ${statuses.map((entry) => '${entry.key} ${entry.value}').join(', ')}',
+              'Users: ${users.map((entry) => '${entry.key} (${entry.value})').join(', ')}',
               style: const TextStyle(
                 color: Color(0xFF64748B),
                 fontWeight: FontWeight.w700,
               ),
             ),
+            if (count.latestEntry != null) ...[
+              const SizedBox(height: 3),
+              Text(
+                'Latest entry: ${_preciseDate(count.latestEntry!)}',
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -5918,6 +5930,17 @@ String _roomLabel(Area area) {
   if (name.isNotEmpty) return name;
   if (room.isNotEmpty) return 'Room $room';
   return area.location.trim().isEmpty ? 'Room Asset' : area.location.trim();
+}
+
+bool? _activeSessionRoomAvailable(List<Area> areas, RoomAccessRecord? session) {
+  if (session == null) return null;
+  for (final area in areas) {
+    if (area.id == session.areaId ||
+        _sameAccessTarget(_roomLabel(area), session.areaName)) {
+      return area.active;
+    }
+  }
+  return false;
 }
 
 String _uniqueId(AppUser user) {
