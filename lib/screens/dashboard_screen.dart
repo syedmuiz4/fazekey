@@ -2696,135 +2696,145 @@ class _ZoneControlTabState extends State<_ZoneControlTab> {
       stream: firebase.watchAllUsers(),
       builder: (context, snapshot) {
         final users = snapshot.data ?? const <AppUser>[];
-        final floorOptions = _zoneFloorOptions(
-          areaProvider.areas,
-          allLabel: _allAccessOrders,
-        );
-        final selectedFloor = floorOptions.contains(_floorFilter)
-            ? _floorFilter
-            : _allAccessOrders;
-        final rooms = _filteredRooms(
-          _sortedRooms(areaProvider.areas, logs),
-          selectedFloor,
-        );
-        final roomGroups = _roomGroupsByAccessOrder(rooms);
-        final activeRooms = areaProvider.areas
-            .where((area) => area.active)
-            .length;
-        final capacity = areaProvider.areas.fold<int>(
-          0,
-          (sum, area) => sum + area.capacity,
-        );
-        final used = areaProvider.areas.fold<int>(
-          0,
-          (sum, area) => sum + area.currentOccupancy,
-        );
-        return RefreshIndicator(
-          onRefresh: areaProvider.refresh,
-          child: ListView(
-            padding: const EdgeInsets.all(18),
-            children: [
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final wide = constraints.maxWidth > 760;
-                  return GridView.count(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    crossAxisCount: wide ? 3 : 1,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: wide ? 2.8 : 4.4,
-                    children: [
-                      _ZoneMetricToggle(
-                        selected: _filter == _ZoneFilter.activeRooms,
-                        icon: Icons.meeting_room_rounded,
-                        label: 'Active Rooms',
-                        value: '$activeRooms',
-                        onTap: () =>
-                            setState(() => _filter = _ZoneFilter.activeRooms),
-                      ),
-                      _ZoneMetricToggle(
-                        selected: _filter == _ZoneFilter.capacityUsed,
-                        icon: Icons.speed_rounded,
-                        label: 'Capacity Used',
-                        value: capacity == 0
-                            ? '0%'
-                            : '${((used / capacity) * 100).round()}%',
-                        onTap: () =>
-                            setState(() => _filter = _ZoneFilter.capacityUsed),
-                      ),
-                      _ZoneMetricToggle(
-                        selected: _filter == _ZoneFilter.liveLogs,
-                        icon: Icons.terminal_rounded,
-                        label: 'Live Logs',
-                        value: '${logs.length}',
-                        onTap: () {
-                          setState(() => _filter = _ZoneFilter.liveLogs);
-                          widget.onOpenTimeline(limit: 30);
-                        },
-                      ),
+        return StreamBuilder<List<RoomAccessRecord>>(
+          stream: firebase.watchActiveRoomSessions(),
+          builder: (context, activeSnapshot) {
+            final activeSessions =
+                activeSnapshot.data ?? const <RoomAccessRecord>[];
+            final floorOptions = _zoneFloorOptions(
+              areaProvider.areas,
+              allLabel: _allAccessOrders,
+            );
+            final selectedFloor = floorOptions.contains(_floorFilter)
+                ? _floorFilter
+                : _allAccessOrders;
+            final rooms = _filteredRooms(
+              _sortedRooms(areaProvider.areas, logs),
+              selectedFloor,
+            );
+            final roomGroups = _roomGroupsByAccessOrder(rooms);
+            final activeRooms = areaProvider.areas
+                .where((area) => area.active)
+                .length;
+            final capacity = areaProvider.areas.fold<int>(
+              0,
+              (sum, area) => sum + area.capacity,
+            );
+            final used = areaProvider.areas.fold<int>(
+              0,
+              (sum, area) => sum + area.currentOccupancy,
+            );
+            return RefreshIndicator(
+              onRefresh: areaProvider.refresh,
+              child: ListView(
+                padding: const EdgeInsets.all(18),
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final wide = constraints.maxWidth > 760;
+                      return GridView.count(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisCount: wide ? 3 : 1,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: wide ? 2.8 : 4.4,
+                        children: [
+                          _ZoneMetricToggle(
+                            selected: _filter == _ZoneFilter.activeRooms,
+                            icon: Icons.meeting_room_rounded,
+                            label: 'Active Rooms',
+                            value: '$activeRooms',
+                            onTap: () => setState(
+                              () => _filter = _ZoneFilter.activeRooms,
+                            ),
+                          ),
+                          _ZoneMetricToggle(
+                            selected: _filter == _ZoneFilter.capacityUsed,
+                            icon: Icons.speed_rounded,
+                            label: 'Capacity Used',
+                            value: capacity == 0
+                                ? '0%'
+                                : '${((used / capacity) * 100).round()}%',
+                            onTap: () => setState(
+                              () => _filter = _ZoneFilter.capacityUsed,
+                            ),
+                          ),
+                          _ZoneMetricToggle(
+                            selected: _filter == _ZoneFilter.liveLogs,
+                            icon: Icons.terminal_rounded,
+                            label: 'Live Logs',
+                            value: '${logs.length}',
+                            onTap: () {
+                              setState(() => _filter = _ZoneFilter.liveLogs);
+                              widget.onOpenTimeline(limit: 30);
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  _ZoneRoomFilterBar(
+                    searchController: _roomSearch,
+                    floorOptions: floorOptions,
+                    selectedFloor: selectedFloor,
+                    statusFilter: _statusFilter,
+                    roleFilter: _roleFilter,
+                    onSearchChanged: (_) => setState(() {}),
+                    onFloorChanged: (value) => setState(() {
+                      _floorFilter = value ?? _allAccessOrders;
+                    }),
+                    onStatusChanged: (value) => setState(() {
+                      _statusFilter = value ?? _RoomStatusFilter.all;
+                    }),
+                    onRoleChanged: (value) => setState(() {
+                      _roleFilter = value ?? _allRoles;
+                    }),
+                  ),
+                  if (areaProvider.error != null) ...[
+                    const SizedBox(height: 12),
+                    _InlineError(message: areaProvider.error!),
+                  ],
+                  const SizedBox(height: 12),
+                  if (roomGroups.isEmpty)
+                    const _EmptyState(
+                      icon: Icons.meeting_room_rounded,
+                      title: 'No linked rooms available',
+                    )
+                  else
+                    for (final group in roomGroups) ...[
+                      _AccessOrderHeader(group: group),
+                      for (final room in group.rooms)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _RoomAssetCard(
+                            area: room,
+                            logs: logs,
+                            users: users,
+                            activeSessions: activeSessions,
+                            expanded: _expandedAreaId == room.id,
+                            detailView: _detailView,
+                            onToggle: () {
+                              setState(() {
+                                _expandedAreaId = _expandedAreaId == room.id
+                                    ? null
+                                    : room.id;
+                                _detailView = _RoomDetailView.settings;
+                              });
+                            },
+                            onDetailViewChanged: (view) =>
+                                setState(() => _detailView = view),
+                            onExport: () => _exportRoom(context, room, logs),
+                            onEdit: () => _openRoomEditor(context, room),
+                            onDelete: () => _deleteRoom(context, room),
+                          ),
+                        ),
                     ],
-                  );
-                },
-              ),
-              const SizedBox(height: 12),
-              _ZoneRoomFilterBar(
-                searchController: _roomSearch,
-                floorOptions: floorOptions,
-                selectedFloor: selectedFloor,
-                statusFilter: _statusFilter,
-                roleFilter: _roleFilter,
-                onSearchChanged: (_) => setState(() {}),
-                onFloorChanged: (value) => setState(() {
-                  _floorFilter = value ?? _allAccessOrders;
-                }),
-                onStatusChanged: (value) => setState(() {
-                  _statusFilter = value ?? _RoomStatusFilter.all;
-                }),
-                onRoleChanged: (value) => setState(() {
-                  _roleFilter = value ?? _allRoles;
-                }),
-              ),
-              if (areaProvider.error != null) ...[
-                const SizedBox(height: 12),
-                _InlineError(message: areaProvider.error!),
-              ],
-              const SizedBox(height: 12),
-              if (roomGroups.isEmpty)
-                const _EmptyState(
-                  icon: Icons.meeting_room_rounded,
-                  title: 'No linked rooms available',
-                )
-              else
-                for (final group in roomGroups) ...[
-                  _AccessOrderHeader(group: group),
-                  for (final room in group.rooms)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _RoomAssetCard(
-                        area: room,
-                        logs: logs,
-                        users: users,
-                        expanded: _expandedAreaId == room.id,
-                        detailView: _detailView,
-                        onToggle: () {
-                          setState(() {
-                            _expandedAreaId = _expandedAreaId == room.id
-                                ? null
-                                : room.id;
-                            _detailView = _RoomDetailView.settings;
-                          });
-                        },
-                        onDetailViewChanged: (view) =>
-                            setState(() => _detailView = view),
-                        onExport: () => _exportRoom(context, room, logs),
-                        onEdit: () => _openRoomEditor(context, room),
-                        onDelete: () => _deleteRoom(context, room),
-                      ),
-                    ),
                 ],
-            ],
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -3224,6 +3234,7 @@ class _RoomAssetCard extends StatelessWidget {
     required this.area,
     required this.logs,
     required this.users,
+    required this.activeSessions,
     required this.expanded,
     required this.detailView,
     required this.onToggle,
@@ -3236,6 +3247,7 @@ class _RoomAssetCard extends StatelessWidget {
   final Area area;
   final List<AccessLog> logs;
   final List<AppUser> users;
+  final List<RoomAccessRecord> activeSessions;
   final bool expanded;
   final _RoomDetailView detailView;
   final VoidCallback onToggle;
@@ -3246,7 +3258,9 @@ class _RoomAssetCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final occupants = _occupantLogs(area, logs);
+    final occupants =
+        activeSessions.where((session) => session.areaId == area.id).toList()
+          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return GlassCard(
       onTap: onToggle,
       padding: const EdgeInsets.all(14),
@@ -3667,7 +3681,7 @@ class _RoomHistoryView extends StatefulWidget {
 
   final Area area;
   final List<AccessLog> logs;
-  final List<AccessLog> occupants;
+  final List<RoomAccessRecord> occupants;
 
   @override
   State<_RoomHistoryView> createState() => _RoomHistoryViewState();
@@ -3722,13 +3736,21 @@ class _RoomHistoryViewState extends State<_RoomHistoryView> {
         if (widget.occupants.isEmpty)
           const Text('No live occupants recorded.')
         else
-          for (final log in widget.occupants.take(6))
+          for (final session in widget.occupants)
             ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.person_pin_circle_rounded),
-              title: Text(log.userName),
-              subtitle: Text(_preciseDate(log.timestamp)),
+              title: Text(session.userName),
+              subtitle: Text(_preciseDate(session.timestamp)),
+              trailing: IconButton(
+                tooltip: 'Remove from room',
+                icon: const Icon(
+                  Icons.person_remove_rounded,
+                  color: Color(0xFFE11D48),
+                ),
+                onPressed: () => _removeOccupant(session),
+              ),
             ),
         const Divider(height: 24),
         const Text(
@@ -3757,6 +3779,66 @@ class _RoomHistoryViewState extends State<_RoomHistoryView> {
       default:
         return true;
     }
+  }
+
+  Future<void> _removeOccupant(RoomAccessRecord session) async {
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove from Room'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'End ${session.userName}\'s active session in ${session.areaName}?',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason',
+                hintText: 'Emergency, maintenance, forgotten scan-out...',
+              ),
+              maxLines: 2,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.person_remove_rounded),
+            label: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      reasonController.dispose();
+      return;
+    }
+    final result = await context
+        .read<FirebaseService>()
+        .removeUserFromRoomByAdmin(
+          session: session,
+          reason: reasonController.text,
+        );
+    reasonController.dispose();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.allowed
+              ? '${session.userName} was removed from ${session.areaName}.'
+              : result.message,
+        ),
+      ),
+    );
   }
 }
 
@@ -4414,6 +4496,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
     final rooms = {
       ...commandCenterRoomNames,
       ...logs
+          .where((log) => !_isApplicationFaceLogin(log))
           .map((log) => log.areaName.trim())
           .where((room) => room.isNotEmpty),
     }.toList()..sort();
@@ -4460,21 +4543,22 @@ class _RoomActivityDistribution extends StatelessWidget {
           : count.latestEntry;
     }
     final entries = counts.entries.toList()
-      ..sort((a, b) => b.value.total.compareTo(a.value.total));
+      ..sort((a, b) => b.value.users.length.compareTo(a.value.users.length));
     final visible = entries.take(6).toList();
+    final users =
+        counts.values.expand((count) => count.users.keys).toSet().toList()
+          ..sort();
+    final userColors = {
+      for (var i = 0; i < users.length; i++)
+        users[i]: _activityUserColor(i, users.length),
+    };
     final maxCount = visible.isEmpty
         ? 1.0
         : visible
-              .map(
-                (entry) =>
-                    math.max(entry.value.entries, entry.value.users.length),
-              )
+              .map((entry) => entry.value.users.length)
               .reduce(math.max)
               .toDouble();
-    final totalActivity = entries.fold<int>(
-      0,
-      (total, entry) => total + entry.value.total,
-    );
+    final totalUsers = users.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4501,11 +4585,11 @@ class _RoomActivityDistribution extends StatelessWidget {
           spacing: 12,
           runSpacing: 8,
           children: [
-            _ChartLegend(color: const Color(0xFF0D9488), label: 'Room entries'),
-            _ChartLegend(color: const Color(0xFF2563EB), label: 'Unique users'),
+            for (final user in users)
+              _ChartLegend(color: userColors[user]!, label: user),
             Chip(
-              avatar: const Icon(Icons.timeline_rounded, size: 18),
-              label: Text('Successful entries: $totalActivity'),
+              avatar: const Icon(Icons.people_alt_rounded, size: 18),
+              label: Text('Users: $totalUsers'),
             ),
           ],
         ),
@@ -4526,8 +4610,9 @@ class _RoomActivityDistribution extends StatelessWidget {
                   touchTooltipData: BarTouchTooltipData(
                     getTooltipItem: (group, groupIndex, rod, rodIndex) {
                       final entry = visible[group.x.toInt()];
+                      final roomUsers = entry.value.users.keys.toList()..sort();
                       return BarTooltipItem(
-                        '${entry.key}\nEntries: ${entry.value.entries}\nUsers: ${entry.value.users.length}',
+                        '${entry.key}\nUsers: ${entry.value.users.length}\n${roomUsers.join(', ')}',
                         const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w900,
@@ -4587,16 +4672,13 @@ class _RoomActivityDistribution extends StatelessWidget {
                       x: i,
                       barRods: [
                         BarChartRodData(
-                          toY: visible[i].value.entries.toDouble(),
-                          width: 14,
-                          borderRadius: BorderRadius.circular(4),
-                          color: const Color(0xFF0D9488),
-                        ),
-                        BarChartRodData(
                           toY: visible[i].value.users.length.toDouble(),
-                          width: 14,
+                          width: 24,
                           borderRadius: BorderRadius.circular(4),
-                          color: const Color(0xFF2563EB),
+                          rodStackItems: _userStackItems(
+                            visible[i].value,
+                            userColors,
+                          ),
                         ),
                       ],
                     ),
@@ -4615,6 +4697,26 @@ class _RoomActivityDistribution extends StatelessWidget {
       ],
     );
   }
+}
+
+List<BarChartRodStackItem> _userStackItems(
+  _RoomActivityCount count,
+  Map<String, Color> userColors,
+) {
+  final users = count.users.keys.toList()..sort();
+  return [
+    for (var i = 0; i < users.length; i++)
+      BarChartRodStackItem(
+        i.toDouble(),
+        (i + 1).toDouble(),
+        userColors[users[i]]!,
+      ),
+  ];
+}
+
+Color _activityUserColor(int index, int total) {
+  final hue = total <= 1 ? 174.0 : (index * 360 / total) % 360;
+  return HSVColor.fromAHSV(1, hue, .72, .78).toColor();
 }
 
 class _RoomActivityCount {
@@ -5986,9 +6088,13 @@ String _validLanguage(String value) {
 }
 
 bool _logBelongsToArea(AccessLog log, Area area) {
+  if (_isApplicationFaceLogin(log)) return false;
   if (log.areaId.trim().isNotEmpty && log.areaId == area.id) return true;
   return _roomAccessKeys(area).contains(_accessKey(log.areaName));
 }
+
+bool _isApplicationFaceLogin(AccessLog log) =>
+    _accessKey(log.areaName) == _accessKey('Application Face Login');
 
 bool _userAssignedToArea(AppUser user, Area area) {
   final roomKeys = _roomAccessKeys(area);

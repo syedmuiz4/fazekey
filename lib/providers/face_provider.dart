@@ -14,7 +14,7 @@ class FaceProvider extends ChangeNotifier {
   FaceProvider(this._face, this._firebase);
 
   static const _verificationThreshold = 0.9;
-  static const _minimumIdentityMargin = 0.08;
+  static const _minimumIdentityMargin = 0.12;
 
   final FaceRecognitionService _face;
   final FirebaseService _firebase;
@@ -88,21 +88,11 @@ class FaceProvider extends ChangeNotifier {
     _notifyAfterFrame();
     try {
       final embedding = await _face.embeddingFromFile(capture);
-      final localMatch = await _face.localDb.findNearestFace(
-        embedding,
-        threshold: _verificationThreshold,
-        minimumMargin: _minimumIdentityMargin,
-      );
-      final remoteMatch = await _firebase.findNearestRemoteFace(
-        embedding,
-        threshold: _verificationThreshold,
-        minimumMargin: _minimumIdentityMargin,
-      );
-      final match = remoteMatch == null
-          ? null
-          : localMatch == null || localMatch.userId == remoteMatch.userId
-          ? remoteMatch
-          : null;
+      var match = await _findConsistentMatch(embedding);
+      if (match == null) {
+        final legacyEmbedding = await _face.legacyEmbeddingFromFile(capture);
+        match = await _findConsistentMatch(legacyEmbedding);
+      }
       lastDistance = match?.distance;
       lastMatchedUserId = match?.userId;
       loading = false;
@@ -114,6 +104,25 @@ class FaceProvider extends ChangeNotifier {
       _notifyAfterFrame();
       return null;
     }
+  }
+
+  Future<LocalFaceMatch?> _findConsistentMatch(List<double> embedding) async {
+    final localMatch = await _face.localDb.findNearestFace(
+      embedding,
+      threshold: _verificationThreshold,
+      minimumMargin: _minimumIdentityMargin,
+    );
+    final remoteMatch = await _firebase.findNearestRemoteFace(
+      embedding,
+      threshold: _verificationThreshold,
+      minimumMargin: _minimumIdentityMargin,
+    );
+    if (localMatch != null &&
+        remoteMatch != null &&
+        localMatch.userId != remoteMatch.userId) {
+      return null;
+    }
+    return remoteMatch ?? localMatch;
   }
 
   Future<AppUser?> resolveLocalMatch(LocalFaceMatch? match) async {

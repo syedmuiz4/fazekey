@@ -227,23 +227,19 @@ class FirebaseService {
         password: cleanCurrentPassword,
       );
     } on FirebaseAuthException {
-      throw Exception(
-        'Temporary password is incorrect or expired. Ask admin to send the temporary password again.',
-      );
+      throw Exception('Temporary password is incorrect.');
     } catch (e) {
       final message = e.toString().toLowerCase();
-      if (message.contains('credential') ||
-          message.contains('password') ||
-          message.contains('expired')) {
-        throw Exception(
-          'Temporary password is incorrect or expired. Ask admin to send the temporary password again.',
-        );
+      if (message.contains('credential') || message.contains('password')) {
+        throw Exception('Temporary password is incorrect.');
       }
       rethrow;
     }
     await _authCall(() => account.updatePassword(cleanNewPassword));
     await userRef(account.uid).set({
       'requiresPasswordChange': false,
+      'isNewTemporaryPasswordAccount': false,
+      'temporaryPasswordIssuedAt': FieldValue.delete(),
       'temporaryPasswordExpiresAt': FieldValue.delete(),
       'temporaryPasswordChangedAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -580,6 +576,7 @@ class FirebaseService {
       ),
       'temporaryPasswordEmailSent': false,
       'requiresPasswordChange': true,
+      'isNewTemporaryPasswordAccount': true,
     });
     return user;
   }
@@ -1662,6 +1659,77 @@ class FirebaseService {
     });
   }
 
+  Future<RoomSessionChange> removeUserFromRoomByAdmin({
+    required RoomAccessRecord session,
+    required String reason,
+  }) async {
+    final cleanReason = reason.trim();
+    final now = DateTime.now();
+    final activeRef = activeRoomSessionsRef.doc(session.userId);
+    final result = await firestore.runTransaction<RoomSessionChange>((
+      transaction,
+    ) async {
+      final activeSnap = await transaction.get(activeRef);
+      final activeData = activeSnap.data();
+      if (!activeSnap.exists || activeData == null) {
+        return const RoomSessionChange(
+          allowed: false,
+          message: 'This user is no longer in the room',
+        );
+      }
+      final active = RoomAccessRecord.fromMap(activeSnap.id, activeData);
+      if (active.sessionId != session.sessionId ||
+          active.areaId != session.areaId) {
+        return RoomSessionChange(
+          allowed: false,
+          activeSession: active,
+          message: 'The user is currently active in a different room',
+        );
+      }
+      final areaRef = firestore.collection('areas').doc(active.areaId);
+      final areaSnap = await transaction.get(areaRef);
+      final occupancy =
+          (areaSnap.data()?['currentOccupancy'] as num?)?.toInt() ?? 0;
+      final exit = RoomAccessRecord(
+        id: '${active.sessionId}_admin_${now.microsecondsSinceEpoch}',
+        sessionId: active.sessionId,
+        userId: active.userId,
+        userName: active.userName,
+        areaId: active.areaId,
+        areaName: active.areaName,
+        event: 'exit',
+        timestamp: now,
+        reason: cleanReason.isEmpty
+            ? 'Removed from room by administrator'
+            : 'Removed by administrator: $cleanReason',
+      );
+      transaction.set(roomAccessRecordsRef.doc(exit.id), exit.toMap());
+      transaction.delete(activeRef);
+      transaction.set(userRef(active.userId), {
+        'room': '',
+        'rooms': const <String>[],
+        'permittedZones': const <String>[],
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      transaction.set(areaRef, {
+        'allowedUserIds': FieldValue.arrayRemove([active.userId]),
+        'currentOccupancy': math.max(0, occupancy - 1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return const RoomSessionChange(allowed: true);
+    });
+    if (result.allowed) {
+      await _notifyUser(
+        userId: session.userId,
+        title: 'Room session ended',
+        message:
+            'An administrator removed you from ${session.areaName}. Reason: ${cleanReason.isEmpty ? 'Administrative action' : cleanReason}.',
+        type: 'room',
+      );
+    }
+    return result;
+  }
+
   Future<void> closeActiveRoomSessionForUser(AppUser user) async {
     final now = DateTime.now();
     final activeRef = activeRoomSessionsRef.doc(user.id);
@@ -1741,17 +1809,15 @@ class FirebaseService {
       throw Exception('A registered email address is required.');
     }
     await _authCall(() => auth.sendPasswordResetEmail(email: target));
-    try {
-      await userRef(user.id).set({
-        'requiresPasswordChange': false,
-        'temporaryPasswordExpiresAt': FieldValue.delete(),
-        'temporaryPasswordSetupEmailSent': true,
-        'temporaryPasswordSetupEmailSentAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (_) {
-      // The Firebase email was already sent; profile metadata is best-effort.
-    }
+    await userRef(user.id).set({
+      'requiresPasswordChange': false,
+      'isNewTemporaryPasswordAccount': false,
+      'temporaryPasswordIssuedAt': FieldValue.delete(),
+      'temporaryPasswordExpiresAt': FieldValue.delete(),
+      'temporaryPasswordSetupEmailSent': true,
+      'temporaryPasswordSetupEmailSentAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
     try {
       await _notifyUser(
         userId: user.id,
@@ -1763,6 +1829,26 @@ class FirebaseService {
     } catch (_) {
       // Notification writes should not make the direct email action fail.
     }
+  }
+
+  Future<void> synchronizePasswordSetupState(String userId) async {
+    final id = userId.trim();
+    if (id.isEmpty) return;
+    final ref = userRef(id);
+    final snapshot = await ref.get();
+    final data = snapshot.data();
+    if (data == null ||
+        data['temporaryPasswordSetupEmailSent'] != true ||
+        data['requiresPasswordChange'] != true) {
+      return;
+    }
+    await ref.set({
+      'requiresPasswordChange': false,
+      'temporaryPasswordIssuedAt': FieldValue.delete(),
+      'temporaryPasswordExpiresAt': FieldValue.delete(),
+      'passwordSetupReconciledAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> decidePasswordResetRequest({
@@ -2320,8 +2406,8 @@ class FirebaseService {
   }
 
   static void _validateStrongTemporaryPassword(String password) {
-    if (password.length < 12) {
-      throw Exception('New password must be at least 12 characters long.');
+    if (password.length < 8) {
+      throw Exception('New password must be at least 8 characters long.');
     }
     if (!RegExp(r'[A-Z]').hasMatch(password) ||
         !RegExp(r'[a-z]').hasMatch(password) ||

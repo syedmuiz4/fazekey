@@ -28,6 +28,7 @@ class AppUser {
     this.photoChangeRequestedAt,
     this.photoUpdatedAt,
     this.requiresPasswordChange = false,
+    this.isNewTemporaryPasswordAccount = false,
     this.temporaryPasswordIssuedAt,
     this.temporaryPasswordExpiresAt,
     this.accessValidFrom,
@@ -58,6 +59,7 @@ class AppUser {
   final DateTime? photoChangeRequestedAt;
   final DateTime? photoUpdatedAt;
   final bool requiresPasswordChange;
+  final bool isNewTemporaryPasswordAccount;
   final DateTime? temporaryPasswordIssuedAt;
   final DateTime? temporaryPasswordExpiresAt;
   final DateTime? accessValidFrom;
@@ -198,6 +200,8 @@ class AppUser {
           ?.toDate(),
       photoUpdatedAt: (map['photoUpdatedAt'] as Timestamp?)?.toDate(),
       requiresPasswordChange: map['requiresPasswordChange'] == true,
+      isNewTemporaryPasswordAccount:
+          map['isNewTemporaryPasswordAccount'] == true,
       temporaryPasswordIssuedAt:
           (map['temporaryPasswordIssuedAt'] as Timestamp?)?.toDate(),
       temporaryPasswordExpiresAt:
@@ -252,6 +256,7 @@ class AppUser {
     if (photoUpdatedAt != null)
       'photoUpdatedAt': Timestamp.fromDate(photoUpdatedAt!),
     'requiresPasswordChange': requiresPasswordChange,
+    'isNewTemporaryPasswordAccount': isNewTemporaryPasswordAccount,
     if (temporaryPasswordIssuedAt != null)
       'temporaryPasswordIssuedAt': Timestamp.fromDate(
         temporaryPasswordIssuedAt!,
@@ -289,6 +294,7 @@ class AppUser {
     DateTime? photoChangeRequestedAt,
     DateTime? photoUpdatedAt,
     bool? requiresPasswordChange,
+    bool? isNewTemporaryPasswordAccount,
     DateTime? temporaryPasswordIssuedAt,
     DateTime? temporaryPasswordExpiresAt,
     DateTime? accessValidFrom,
@@ -320,6 +326,8 @@ class AppUser {
     photoUpdatedAt: photoUpdatedAt ?? this.photoUpdatedAt,
     requiresPasswordChange:
         requiresPasswordChange ?? this.requiresPasswordChange,
+    isNewTemporaryPasswordAccount:
+        isNewTemporaryPasswordAccount ?? this.isNewTemporaryPasswordAccount,
     temporaryPasswordIssuedAt:
         temporaryPasswordIssuedAt ?? this.temporaryPasswordIssuedAt,
     temporaryPasswordExpiresAt:

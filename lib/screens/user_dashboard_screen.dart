@@ -63,7 +63,9 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
       initialData: auth.user,
       builder: (context, snapshot) {
         final user = snapshot.data ?? auth.user;
-        if (user != null && user.requiresPasswordChange && !user.isAdmin) {
+        if (user != null &&
+            auth.requiresPasswordChange &&
+            user.id == auth.user?.id) {
           _scheduleTemporaryPasswordChange(user);
         }
         return AppBackground(
@@ -120,8 +122,9 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
       if (!mounted) return;
       _passwordDialogShowing = false;
       final current = context.read<AuthProvider>().user;
-      if (current?.requiresPasswordChange == true && current?.isAdmin != true) {
-        _scheduleTemporaryPasswordChange(current!);
+      if (context.read<AuthProvider>().requiresPasswordChange &&
+          current != null) {
+        _scheduleTemporaryPasswordChange(current);
       } else {
         _passwordDialogUserId = null;
       }
@@ -147,6 +150,9 @@ class _TemporaryPasswordChangeDialogState
   final _confirmPassword = TextEditingController();
   bool _submitted = false;
   bool _saving = false;
+  bool _showCurrentPassword = false;
+  bool _showNewPassword = false;
+  bool _showConfirmPassword = false;
   String? _error;
 
   @override
@@ -177,33 +183,72 @@ class _TemporaryPasswordChangeDialogState
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Use at least 12 characters.\nCombine uppercase/lowercase letters, numbers, and symbols.',
+                    'Use at least 8 characters.\nCombine uppercase/lowercase letters, numbers, and symbols.',
                     style: TextStyle(fontWeight: FontWeight.w800),
                   ),
                   const SizedBox(height: 14),
                   TextFormField(
                     controller: _currentPassword,
-                    obscureText: true,
-                    decoration: const InputDecoration(
+                    obscureText: !_showCurrentPassword,
+                    decoration: InputDecoration(
                       labelText: 'Temporary Password',
+                      suffixIcon: IconButton(
+                        tooltip: _showCurrentPassword
+                            ? 'Hide password'
+                            : 'Show password',
+                        onPressed: () => setState(
+                          () => _showCurrentPassword = !_showCurrentPassword,
+                        ),
+                        icon: Icon(
+                          _showCurrentPassword
+                              ? Icons.visibility_off_rounded
+                              : Icons.visibility_rounded,
+                        ),
+                      ),
                     ),
                     validator: _required,
                   ),
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _newPassword,
-                    obscureText: true,
-                    decoration: const InputDecoration(
+                    obscureText: !_showNewPassword,
+                    decoration: InputDecoration(
                       labelText: 'New Password',
+                      suffixIcon: IconButton(
+                        tooltip: _showNewPassword
+                            ? 'Hide password'
+                            : 'Show password',
+                        onPressed: () => setState(
+                          () => _showNewPassword = !_showNewPassword,
+                        ),
+                        icon: Icon(
+                          _showNewPassword
+                              ? Icons.visibility_off_rounded
+                              : Icons.visibility_rounded,
+                        ),
+                      ),
                     ),
                     validator: _newPasswordValidator,
                   ),
                   const SizedBox(height: 10),
                   TextFormField(
                     controller: _confirmPassword,
-                    obscureText: true,
-                    decoration: const InputDecoration(
+                    obscureText: !_showConfirmPassword,
+                    decoration: InputDecoration(
                       labelText: 'Confirm New Password',
+                      suffixIcon: IconButton(
+                        tooltip: _showConfirmPassword
+                            ? 'Hide password'
+                            : 'Show password',
+                        onPressed: () => setState(
+                          () => _showConfirmPassword = !_showConfirmPassword,
+                        ),
+                        icon: Icon(
+                          _showConfirmPassword
+                              ? Icons.visibility_off_rounded
+                              : Icons.visibility_rounded,
+                        ),
+                      ),
                     ),
                     validator: (value) {
                       if (value == null || value.trim().isEmpty) {
@@ -276,7 +321,7 @@ class _TemporaryPasswordChangeDialogState
   String? _newPasswordValidator(String? value) {
     final password = value?.trim() ?? '';
     if (password.isEmpty) return 'Required';
-    if (password.length < 12) return 'Use at least 12 characters';
+    if (password.length < 8) return 'Use at least 8 characters';
     if (!RegExp(r'[A-Z]').hasMatch(password)) {
       return 'Add an uppercase letter';
     }

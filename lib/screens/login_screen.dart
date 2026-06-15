@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-import '../models/area.dart';
 import '../providers/auth_provider.dart';
-import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import '../widgets/corporate_chrome.dart';
 import '../widgets/glass_card.dart';
@@ -64,115 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
     if (enterRoom != true || !mounted) return;
-    await _showRoomSelection(chooseLoginType: false);
-  }
-
-  Future<void> _showRoomSelection({bool chooseLoginType = true}) async {
-    if (chooseLoginType) {
-      final loginType = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Face Login'),
-          content: const Text('Choose how you want to continue.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, 'user'),
-              child: const Text('User Room Entry'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, 'admin'),
-              child: const Text('Admin Login'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted || loginType == null) return;
-      if (loginType == 'admin') {
-        Navigator.of(context).pushNamed(
-          FaceLoginScreen.route,
-          arguments: const {'adminLogin': true},
-        );
-        return;
-      }
-    }
-    final firebase = context.read<FirebaseService>();
-    final snapshot = await firebase.firestore.collection('areas').get();
-    final rooms =
-        snapshot.docs
-            .map((doc) => Area.fromMap(doc.id, doc.data()))
-            .where((area) => area.active)
-            .toList()
-          ..sort((a, b) => _roomLabel(a).compareTo(_roomLabel(b)));
-    if (!mounted) return;
-    if (rooms.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No active rooms are available.')),
-      );
-      return;
-    }
-    var selectedArea = rooms.first;
-    final area = await showDialog<Area>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Select Room'),
-          content: DropdownButtonFormField<String>(
-            initialValue: selectedArea.id,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Room'),
-            items: [
-              for (final room in rooms)
-                DropdownMenuItem(
-                  value: room.id,
-                  child: Text(
-                    _roomLabel(room),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setDialogState(() {
-                selectedArea = rooms.firstWhere((room) => room.id == value);
-              });
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, selectedArea),
-              child: const Text('Continue'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (area == null || !mounted) return;
-    Navigator.of(context).pushNamed(
-      FaceLoginScreen.route,
-      arguments: {
-        'roomId': area.id,
-        'roomName': _roomLabel(area),
-        'sessionAction': 'entry',
-      },
-    );
-  }
-
-  String _roomLabel(Area area) {
-    final room = area.roomNumber.trim();
-    final name = area.name.trim();
-    if (room.isNotEmpty && name.isNotEmpty) return '$room - $name';
-    if (room.isNotEmpty) return room;
-    if (name.isNotEmpty) return name;
-    return area.id;
+    Navigator.of(context).pushNamed(FaceLoginScreen.route);
   }
 
   @override
@@ -253,7 +143,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                     borderRadius: BorderRadius.circular(25),
                                   ),
                                 ),
-                                onPressed: _showRoomSelection,
+                                onPressed: () => Navigator.of(
+                                  context,
+                                ).pushNamed(FaceLoginScreen.route),
                                 child: const Text(
                                   'Login with Face',
                                   style: TextStyle(fontWeight: FontWeight.w900),

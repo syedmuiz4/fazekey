@@ -11,6 +11,7 @@ class AuthProvider extends ChangeNotifier {
 
   final FirebaseService _firebase;
   final LocalDatabaseService _localDb;
+  final Set<String> _completedPasswordChangeUserIds = {};
   StreamSubscription<AppUser?>? _profileSub;
   AppUser? user;
   bool loading = true;
@@ -25,7 +26,9 @@ class AuthProvider extends ChangeNotifier {
   bool get isUser => isAuthenticated && !isAdmin;
 
   bool get requiresPasswordChange =>
-      user?.requiresPasswordChange == true && !isAdmin;
+      user?.requiresPasswordChange == true &&
+      user?.isNewTemporaryPasswordAccount == true &&
+      !isAdmin;
 
   bool get hasSignedInAccount => _firebase.currentUserId != null;
 
@@ -53,7 +56,7 @@ class AuthProvider extends ChangeNotifier {
           .watchUser(firebaseUser.uid)
           .listen(
             (profile) {
-              user = profile;
+              user = _normalizePasswordChangeState(profile);
               loading = false;
               notifyListeners();
             },
@@ -70,6 +73,7 @@ class AuthProvider extends ChangeNotifier {
   Future<bool> login(String email, String password) async {
     return _guard(() async {
       final cred = await _firebase.login(email, password);
+      await _firebase.synchronizePasswordSetupState(cred.user!.uid);
       user = await _firebase.getUser(cred.user!.uid);
       final profile = user;
       if (profile != null) {
@@ -153,13 +157,14 @@ class AuthProvider extends ChangeNotifier {
   }
 
   void completeFaceLogin(AppUser verifiedUser) {
-    user = verifiedUser;
+    user = _normalizePasswordChangeState(verifiedUser);
     loading = false;
     error = null;
     notifyListeners();
   }
 
   void syncProfileSnapshot(AppUser? latest) {
+    latest = _normalizePasswordChangeState(latest);
     if (_sameProfile(user, latest)) return;
     user = latest;
     loading = false;
@@ -168,7 +173,11 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Stream<AppUser?> watchActiveUserProfile() {
-    if (hasSignedInAccount) return _firebase.watchCurrentUserProfile();
+    if (hasSignedInAccount) {
+      return _firebase.watchCurrentUserProfile().map(
+        _normalizePasswordChangeState,
+      );
+    }
     final activeUser = user;
     if (activeUser != null) return Stream<AppUser?>.value(activeUser);
     return Stream<AppUser?>.value(null);
@@ -249,6 +258,7 @@ class AuthProvider extends ChangeNotifier {
       );
       final current = user;
       if (current != null) {
+        _completedPasswordChangeUserIds.add(current.id);
         user = current.copyWith(requiresPasswordChange: false);
       }
     });
@@ -314,6 +324,8 @@ class AuthProvider extends ChangeNotifier {
         left.photoChangeRequestedAt == right.photoChangeRequestedAt &&
         left.photoUpdatedAt == right.photoUpdatedAt &&
         left.requiresPasswordChange == right.requiresPasswordChange &&
+        left.isNewTemporaryPasswordAccount ==
+            right.isNewTemporaryPasswordAccount &&
         left.temporaryPasswordIssuedAt == right.temporaryPasswordIssuedAt &&
         left.temporaryPasswordExpiresAt == right.temporaryPasswordExpiresAt &&
         left.accessValidFrom == right.accessValidFrom &&
@@ -326,6 +338,19 @@ class AuthProvider extends ChangeNotifier {
       if (left[i] != right[i]) return false;
     }
     return true;
+  }
+
+  AppUser? _normalizePasswordChangeState(AppUser? profile) {
+    if (profile == null) return null;
+    if (!profile.isNewTemporaryPasswordAccount &&
+        profile.requiresPasswordChange) {
+      return profile.copyWith(requiresPasswordChange: false);
+    }
+    if (!_completedPasswordChangeUserIds.contains(profile.id) ||
+        !profile.requiresPasswordChange) {
+      return profile;
+    }
+    return profile.copyWith(requiresPasswordChange: false);
   }
 
   @override

@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
@@ -21,10 +22,17 @@ class FaceRecognitionException implements Exception {
 class FaceRecognitionService {
   FaceRecognitionService(this.localDb);
 
-  static const int _staticFrameWidth = 720;
-  static const int _staticFrameHeight = 480;
+  static const int _legacyFrameWidth = 720;
+  static const int _legacyFrameHeight = 480;
 
   final LocalDatabaseService localDb;
+  final FaceDetector _faceDetector = FaceDetector(
+    options: FaceDetectorOptions(
+      performanceMode: FaceDetectorMode.accurate,
+      enableClassification: true,
+      minFaceSize: 0.2,
+    ),
+  );
   Interpreter? _faceNetInterpreter;
   Interpreter? _blazeFaceInterpreter;
   Future<void>? _initializing;
@@ -180,9 +188,21 @@ class FaceRecognitionService {
   Future<List<_LocalFaceDetection>> _detectFaces(XFile file) async {
     return _runDetectorTask(() async {
       try {
-        return await Isolate.run(
-          () => _detectStandaloneFaces(file.path),
-        ).timeout(const Duration(seconds: 8));
+        final faces = await _faceDetector
+            .processImage(InputImage.fromFilePath(file.path))
+            .timeout(const Duration(seconds: 8));
+        return faces
+            .map(
+              (face) => _LocalFaceDetection(
+                boundingBox: _LocalFaceBox(
+                  left: face.boundingBox.left,
+                  top: face.boundingBox.top,
+                  width: face.boundingBox.width,
+                  height: face.boundingBox.height,
+                ),
+              ),
+            )
+            .toList(growable: false);
       } on TimeoutException {
         throw const FaceRecognitionException(
           'Face detection timed out. Try brighter lighting and keep your face centered.',
@@ -267,6 +287,23 @@ class FaceRecognitionService {
     return _l2Normalize(output.first);
   }
 
+  Future<List<double>> legacyEmbeddingFromFile(XFile file) async {
+    await initialize();
+    final faces = await _detectFaces(file);
+    _validateSingleLiveFace(faces);
+    final input = await Isolate.run(
+      () => _prepareLegacyFaceNetInput(file.path),
+    );
+    final output = List.generate(
+      1,
+      (_) => List<double>.filled(FaceModelConfig.embeddingSize, 0),
+    );
+    final interpreter = _faceNetInterpreter!;
+    _prepareDynamicTensorLayout(interpreter);
+    interpreter.run(input, output);
+    return _l2Normalize(output.first);
+  }
+
   Future<List<double>> averageEmbeddings(List<XFile> captures) async {
     if (captures.length < 3) {
       throw const FaceRecognitionException(
@@ -304,6 +341,7 @@ class FaceRecognitionService {
 
   Future<void> close() async {
     await closeDetector();
+    await _faceDetector.close();
     _faceNetInterpreter?.close();
     _blazeFaceInterpreter?.close();
     _faceNetInterpreter = null;
@@ -347,40 +385,18 @@ class _LocalFaceBox {
   final double height;
 }
 
-List<_LocalFaceDetection> _detectStandaloneFaces(String path) {
-  final decoded = img.decodeImage(File(path).readAsBytesSync());
-  if (decoded == null) {
-    throw const FaceRecognitionException('Could not read camera frame.');
-  }
-  final staticFrame = _normalizeCameraFrame(decoded);
-  final box = _estimateCenteredFaceBox(staticFrame.width, staticFrame.height);
-  return [_LocalFaceDetection(boundingBox: box)];
-}
-
-_LocalFaceBox _estimateCenteredFaceBox(int width, int height) {
-  final boxWidth = width * .46;
-  final boxHeight = height * .66;
-  return _LocalFaceBox(
-    left: (width - boxWidth) / 2,
-    top: height * .17,
-    width: boxWidth,
-    height: boxHeight,
-  );
-}
-
 List<List<List<List<double>>>> _prepareFaceNetInput(_FaceCropRequest request) {
   final decoded = img.decodeImage(File(request.path).readAsBytesSync());
   if (decoded == null) {
     throw const FaceRecognitionException('Could not read camera frame.');
   }
 
-  final staticFrame = _normalizeCameraFrame(decoded);
-  final left = request.left.clamp(0, staticFrame.width - 1).toInt();
-  final top = request.top.clamp(0, staticFrame.height - 1).toInt();
-  final width = request.width.clamp(1, staticFrame.width - left).toInt();
-  final height = request.height.clamp(1, staticFrame.height - top).toInt();
+  final left = request.left.clamp(0, decoded.width - 1).toInt();
+  final top = request.top.clamp(0, decoded.height - 1).toInt();
+  final width = request.width.clamp(1, decoded.width - left).toInt();
+  final height = request.height.clamp(1, decoded.height - top).toInt();
   final cropped = img.copyCrop(
-    staticFrame,
+    decoded,
     x: left,
     y: top,
     width: width,
@@ -407,14 +423,52 @@ List<List<List<List<double>>>> _prepareFaceNetInput(_FaceCropRequest request) {
   );
 }
 
-img.Image _normalizeCameraFrame(img.Image source) {
+List<List<List<List<double>>>> _prepareLegacyFaceNetInput(String path) {
+  final decoded = img.decodeImage(File(path).readAsBytesSync());
+  if (decoded == null) {
+    throw const FaceRecognitionException('Could not read camera frame.');
+  }
+  final frame = _normalizeLegacyCameraFrame(decoded);
+  final cropped = img.copyCrop(
+    frame,
+    x: (frame.width * .27).round(),
+    y: (frame.height * .17).round(),
+    width: (frame.width * .46).round(),
+    height: (frame.height * .66).round(),
+  );
+  final resized = img.copyResize(
+    cropped,
+    width: FaceModelConfig.inputSize,
+    height: FaceModelConfig.inputSize,
+  );
+  return _imageToFaceNetInput(resized);
+}
+
+List<List<List<List<double>>>> _imageToFaceNetInput(img.Image image) {
+  return List.generate(
+    1,
+    (_) => List.generate(
+      FaceModelConfig.inputSize,
+      (y) => List.generate(FaceModelConfig.inputSize, (x) {
+        final pixel = image.getPixel(x, y);
+        return [
+          (pixel.r - 127.5) / 128.0,
+          (pixel.g - 127.5) / 128.0,
+          (pixel.b - 127.5) / 128.0,
+        ];
+      }),
+    ),
+  );
+}
+
+img.Image _normalizeLegacyCameraFrame(img.Image source) {
   final portrait = source.height > source.width;
   final targetWidth = portrait
-      ? FaceRecognitionService._staticFrameHeight
-      : FaceRecognitionService._staticFrameWidth;
+      ? FaceRecognitionService._legacyFrameHeight
+      : FaceRecognitionService._legacyFrameWidth;
   final targetHeight = portrait
-      ? FaceRecognitionService._staticFrameWidth
-      : FaceRecognitionService._staticFrameHeight;
+      ? FaceRecognitionService._legacyFrameWidth
+      : FaceRecognitionService._legacyFrameHeight;
   final targetAspect = targetWidth / targetHeight;
   final sourceAspect = source.width / source.height;
   var cropX = 0;
