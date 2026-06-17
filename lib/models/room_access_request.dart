@@ -9,6 +9,9 @@ class RoomAccessRequest {
     required this.areaName,
     required this.status,
     required this.createdAt,
+    this.expiresAt,
+    this.exitedPreviousRoom = false,
+    this.previousRoomName = '',
   });
 
   final String id;
@@ -18,8 +21,13 @@ class RoomAccessRequest {
   final String areaName;
   final String status;
   final DateTime createdAt;
+  final DateTime? expiresAt;
+  final bool exitedPreviousRoom;
+  final String previousRoomName;
 
-  bool get isOpen => status == 'open';
+  bool get isOpen =>
+      status == 'open' &&
+      (expiresAt == null || DateTime.now().isBefore(expiresAt!));
 
   factory RoomAccessRequest.fromMap(String id, Map<String, dynamic> map) {
     return RoomAccessRequest(
@@ -30,6 +38,9 @@ class RoomAccessRequest {
       areaName: (map['areaName'] ?? '').toString(),
       status: (map['status'] ?? 'open').toString(),
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      expiresAt: (map['expiresAt'] as Timestamp?)?.toDate(),
+      exitedPreviousRoom: map['exitedPreviousRoom'] == true,
+      previousRoomName: (map['previousRoomName'] ?? '').toString(),
     );
   }
 
@@ -40,5 +51,8 @@ class RoomAccessRequest {
     'areaName': areaName,
     'status': status,
     'createdAt': Timestamp.fromDate(createdAt),
+    if (expiresAt != null) 'expiresAt': Timestamp.fromDate(expiresAt!),
+    'exitedPreviousRoom': exitedPreviousRoom,
+    'previousRoomName': previousRoomName,
   };
 }

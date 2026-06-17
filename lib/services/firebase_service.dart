@@ -1202,6 +1202,8 @@ class FirebaseService {
     required AppUser user,
     required Area area,
     required String areaName,
+    bool exitedPreviousRoom = false,
+    String previousRoomName = '',
   }) async {
     final existing = await roomAccessRequestsRef
         .where('userId', isEqualTo: user.id)
@@ -1218,21 +1220,38 @@ class FirebaseService {
       areaName: areaName,
       status: 'open',
       createdAt: DateTime.now(),
+      expiresAt: DateTime.now().add(const Duration(days: 1)),
+      exitedPreviousRoom: exitedPreviousRoom,
+      previousRoomName: previousRoomName,
     );
     final ref = await roomAccessRequestsRef.add(request.toMap());
     await _notifyAdmins(
       title: 'Room access request',
       message:
-          'User: ${request.userName}\nEmail: ${user.email}\nID: ${user.identityNumber.trim().isEmpty ? user.id : user.identityNumber.trim()}\nRequested room: ${request.areaName}',
+          'User: ${request.userName}\nEmail: ${user.email}\nID: ${user.identityNumber.trim().isEmpty ? user.id : user.identityNumber.trim()}\nRequested room: ${request.areaName}\nRoom status: ${_roomRequestExitStatus(exitedPreviousRoom: exitedPreviousRoom, previousRoomName: previousRoomName)}',
       type: 'room',
       relatedId: ref.id,
     );
   }
 
+  String _roomRequestExitStatus({
+    required bool exitedPreviousRoom,
+    required String previousRoomName,
+  }) {
+    final previous = previousRoomName.trim();
+    if (exitedPreviousRoom) {
+      return 'User already exited ${previous.isEmpty ? 'the previous room' : previous} before this request.';
+    }
+    if (previous.isNotEmpty) {
+      return 'User has not exited $previous yet. Approve only after the room is cleared.';
+    }
+    return 'No active room session was found before this request.';
+  }
+
   Future<void> decideRoomAccessRequest({
     required RoomAccessRequest request,
     required bool allowed,
-    Duration duration = const Duration(hours: 8),
+    Duration duration = const Duration(hours: 2),
   }) async {
     final user = await getUser(request.userId);
     final areaSnap = await firestore
@@ -1244,7 +1263,12 @@ class FirebaseService {
         ? commandCenterAreas[request.areaId]
         : Area.fromMap(areaSnap.id, areaData);
     var finalAllowed = allowed;
-    if (allowed && user != null && area != null) {
+    if (allowed &&
+        request.expiresAt != null &&
+        !DateTime.now().isBefore(request.expiresAt!)) {
+      finalAllowed = false;
+    }
+    if (finalAllowed && user != null && area != null) {
       final now = DateTime.now();
       final endAt = user.accessValidUntil?.isAfter(now) == true
           ? user.accessValidUntil!
@@ -1644,12 +1668,6 @@ class FirebaseService {
       );
       transaction.set(roomAccessRecordsRef.doc(record.id), record.toMap());
       transaction.delete(activeRef);
-      transaction.set(userRef(user.id), {
-        'room': '',
-        'rooms': const <String>[],
-        'permittedZones': const <String>[],
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
       transaction.set(areaRef, {
         'allowedUserIds': FieldValue.arrayRemove([user.id]),
         'currentOccupancy': math.max(0, occupancy - 1),
@@ -1705,12 +1723,6 @@ class FirebaseService {
       );
       transaction.set(roomAccessRecordsRef.doc(exit.id), exit.toMap());
       transaction.delete(activeRef);
-      transaction.set(userRef(active.userId), {
-        'room': '',
-        'rooms': const <String>[],
-        'permittedZones': const <String>[],
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
       transaction.set(areaRef, {
         'allowedUserIds': FieldValue.arrayRemove([active.userId]),
         'currentOccupancy': math.max(0, occupancy - 1),
@@ -1755,12 +1767,6 @@ class FirebaseService {
       );
       transaction.set(roomAccessRecordsRef.doc(record.id), record.toMap());
       transaction.delete(activeRef);
-      transaction.set(userRef(user.id), {
-        'room': '',
-        'rooms': const <String>[],
-        'permittedZones': const <String>[],
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
       transaction.set(areaRef, {
         'allowedUserIds': FieldValue.arrayRemove([user.id]),
         'currentOccupancy': math.max(0, occupancy - 1),
@@ -2006,6 +2012,20 @@ class FirebaseService {
     final existingIds = existing.docs.map((doc) => doc.id).toSet();
     final batch = firestore.batch();
     var hasMissingArea = false;
+    for (final doc in existing.docs) {
+      final data = doc.data();
+      final name = (data['name'] ?? '').toString().trim().toLowerCase();
+      final roomNumber = (data['roomNumber'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (doc.id == 'server_room' ||
+          (name == 'server room' && roomNumber == 'sr-01') ||
+          name == 'nco network operations') {
+        hasMissingArea = true;
+        batch.delete(doc.reference);
+      }
+    }
     for (final entry in commandCenterAreas.entries) {
       if (existingIds.contains(entry.key)) continue;
       hasMissingArea = true;
@@ -2015,12 +2035,95 @@ class FirebaseService {
     await batch.commit();
   }
 
+  Future<void> ensureDemoStaffRoomAssignments() async {
+    await ensureSampleAreas();
+    final areaSnap = await firestore.collection('areas').get();
+    final areasById = {
+      for (final entry in commandCenterAreas.entries) entry.key: entry.value,
+      for (final doc in areaSnap.docs) doc.id: Area.fromMap(doc.id, doc.data()),
+    };
+    Area? areaForId(String id) => areasById[id.trim()];
+    final allRooms = areasById.values.map(_areaRoomLabel).toList()..sort();
+    final assignments = <String, List<String>>{
+      _accessKey('Dr. MOHD ZANES BIN SAHID'): allRooms,
+      _accessKey('PUAN AZIZAH BINTI ALI'): [
+        if (areaForId('server_room_1') != null)
+          _areaRoomLabel(areaForId('server_room_1')!),
+      ],
+      _accessKey('ENCIK FAIZANNIZAM BIN SHAHBUDIN'): [
+        if (areaForId('it_development_suite') != null)
+          _areaRoomLabel(areaForId('it_development_suite')!),
+      ],
+      _accessKey('PUAN RAFIDAH BINTI ABU BAKAR'): [
+        if (areaForId('network_core_operations') != null)
+          _areaRoomLabel(areaForId('network_core_operations')!),
+      ],
+      _accessKey('ENCIK MOHAMMAD HAFIZ BIN MT SAIDUN'): [
+        if (areaForId('ict_office') != null)
+          _areaRoomLabel(areaForId('ict_office')!),
+      ],
+      _accessKey('ENCIK MOHD AL HAFIZ BIN NORDIN'): [
+        if (areaForId('file_room') != null)
+          _areaRoomLabel(areaForId('file_room')!),
+      ],
+      _accessKey('PUAN ZURAIDAH BINTI BACHOK'): [
+        if (areaForId('access_lab') != null)
+          _areaRoomLabel(areaForId('access_lab')!),
+      ],
+      _accessKey('ENCIK SAHIDAN BIN PARAN'): [
+        if (areaForId('server_room_2') != null)
+          _areaRoomLabel(areaForId('server_room_2')!),
+      ],
+      _accessKey('ENCIK MOHAMAD AFIQ BIN MAZNI'): [
+        if (areaForId('server_room_3') != null)
+          _areaRoomLabel(areaForId('server_room_3')!),
+      ],
+    };
+    final users = await firestore.collection('users').get();
+    final batch = firestore.batch();
+    var changed = false;
+    for (final doc in users.docs) {
+      final user = AppUser.fromMap(doc.id, doc.data());
+      final rooms = _normalizedRooms(assignments[_accessKey(user.name)] ?? []);
+      if (rooms.isEmpty) continue;
+      final admin = user.isAdmin;
+      batch.set(doc.reference, {
+        'room': _primaryRoom(rooms),
+        'rooms': rooms,
+        'permittedZones': rooms,
+        'role': admin ? 'Admin' : 'User',
+        'position': admin ? 'Admin' : 'Staff',
+        'status': 'approved',
+        'accessLevel': 3,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      for (final area in areasById.values) {
+        final label = _areaRoomLabel(area);
+        if (!rooms.any((room) => _accessKey(room) == _accessKey(label))) {
+          continue;
+        }
+        batch.set(firestore.collection('areas').doc(area.id), {
+          'allowedUserIds': FieldValue.arrayUnion([user.id]),
+          'revokedUserIds': FieldValue.arrayRemove([user.id]),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      changed = true;
+    }
+    if (changed) await batch.commit();
+  }
+
   Future<void> reconcileRoomOccupancy() async {
     await ensureSampleAreas();
+    final areas = await firestore.collection('areas').get();
+    final areaDocs = {
+      for (final doc in areas.docs) doc.id: Area.fromMap(doc.id, doc.data()),
+    };
     final sessions = await activeRoomSessionsRef.get();
     final occupancyByArea = <String, int>{};
     for (final doc in sessions.docs) {
-      final areaId = (doc.data()['areaId'] ?? '').toString().trim();
+      final session = RoomAccessRecord.fromMap(doc.id, doc.data());
+      final areaId = _canonicalAreaIdForSession(session, areaDocs.values);
       if (areaId.isEmpty) continue;
       occupancyByArea.update(
         areaId,
@@ -2028,7 +2131,6 @@ class FirebaseService {
         ifAbsent: () => 1,
       );
     }
-    final areas = await firestore.collection('areas').get();
     final batch = firestore.batch();
     var hasChanges = false;
     for (final doc in areas.docs) {
@@ -2042,6 +2144,19 @@ class FirebaseService {
       }, SetOptions(merge: true));
     }
     if (hasChanges) await batch.commit();
+  }
+
+  String _canonicalAreaIdForSession(
+    RoomAccessRecord session,
+    Iterable<Area> areas,
+  ) {
+    final id = session.areaId.trim();
+    if (id.isNotEmpty && areas.any((area) => area.id == id)) return id;
+    final sessionKey = _accessKey(_normalizedRoomDisplay(session.areaName));
+    for (final area in areas) {
+      if (_areaRoomKeys(area).contains(sessionKey)) return area.id;
+    }
+    return id;
   }
 
   Future<void> updateArea(Area area) async {
@@ -2422,12 +2537,48 @@ class FirebaseService {
   static String _accessKey(String value) =>
       value.trim().toLowerCase().replaceAll(' ', '');
 
+  static String _normalizedRoomDisplay(String value) {
+    final room = value.trim();
+    final key = _accessKey(room);
+    if (key.isEmpty) return room;
+    const legacyRooms = {
+      'ictoffice': '(L2) ICT-01 - ICT Office',
+      'ictroomoffice': '(L2) ICT-01 - ICT Office',
+      'ict01': '(L2) ICT-01 - ICT Office',
+      'itdevelopmentsuite': '(L3) IT-2 - IT Development Suite',
+      'it2': '(L3) IT-2 - IT Development Suite',
+      'networkcoreoperations': '(L3) NCO-3 - Network Core Operation',
+      'networkcoreoperation': '(L3) NCO-3 - Network Core Operation',
+      'nconetworkoperations': '(L3) NCO-3 - Network Core Operation',
+      'nco3': '(L3) NCO-3 - Network Core Operation',
+      'serverroom': '(L1) SR-1 - Server Room 1',
+      'sr01': '(L1) SR-1 - Server Room 1',
+    };
+    return legacyRooms[key] ?? room;
+  }
+
   static String _areaRoomLabel(Area area) {
     final name = area.name.trim();
     final roomNumber = area.roomNumber.trim();
+    final level = _shortFloorLabel(area.floor);
+    final prefix = level.isEmpty ? '' : '($level) ';
+    if (roomNumber.isNotEmpty && name.isNotEmpty) {
+      return '$prefix$roomNumber - $name';
+    }
     if (name.isNotEmpty) return name;
     if (roomNumber.isNotEmpty) return 'Room $roomNumber';
     return area.location.trim();
+  }
+
+  static String _shortFloorLabel(String floor) {
+    final value = floor.trim().toLowerCase().replaceAll(' ', '');
+    if (value.isEmpty) return '';
+    if (value == 'levelg' || value == 'g' || value.contains('ground')) {
+      return 'LG';
+    }
+    final match = RegExp(r'(?:level|l)?(\d+)').firstMatch(value);
+    if (match == null) return floor.trim();
+    return 'L${match.group(1)}';
   }
 
   static Set<String> _areaRoomKeys(Area area) {

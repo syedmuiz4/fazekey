@@ -11,14 +11,13 @@ const commandCenterDepartments = <String>[
 const commandCenterRoomNames = <String>[
   'ICT Office',
   'General Office',
-  'Server Room',
   'File Room',
   'Server Room 1',
   'Access Lab',
   'Server Room 2',
   'IT Development Suite',
   'Server Room 3',
-  'Network Core Operations',
+  'Network Core Operation',
 ];
 
 const commandCenterFloorOptions = <String>[
@@ -55,19 +54,6 @@ final commandCenterAreas = <String, Area>{
     allowedRoles: const ['User', 'Admin', 'Student', 'Staff'],
     currentOccupancy: 0,
     capacity: 36,
-  ),
-  'server_room': Area(
-    id: 'server_room',
-    name: 'Server Room',
-    location: 'FSKTM',
-    floor: 'Level G',
-    roomNumber: 'SR-01',
-    active: true,
-    createdAt: DateTime(2026, 1, 3),
-    allowedDepartments: const ['ICT Division', 'Information Security'],
-    allowedRoles: const ['Admin', 'Staff', 'User'],
-    currentOccupancy: 0,
-    capacity: 8,
   ),
   'file_room': Area(
     id: 'file_room',
@@ -149,7 +135,7 @@ final commandCenterAreas = <String, Area>{
   ),
   'network_core_operations': Area(
     id: 'network_core_operations',
-    name: 'Network Core Operations',
+    name: 'Network Core Operation',
     location: 'FSKTM',
     floor: 'Level 3',
     roomNumber: 'NCO-3',

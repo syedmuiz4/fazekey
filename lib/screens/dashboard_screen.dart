@@ -102,6 +102,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           (_) {},
         ),
       );
+      unawaited(
+        context
+            .read<FirebaseService>()
+            .ensureDemoStaffRoomAssignments()
+            .catchError((_) {}),
+      );
       final logs = context.read<LogProvider>();
       logs.listen();
       unawaited(logs.syncPending());
@@ -563,12 +569,11 @@ class _CommandDashboardTab extends StatelessWidget {
             .where(
               (log) =>
                   log.granted &&
-                  log.timestamp.isAfter(
-                    now.subtract(const Duration(hours: 24)),
-                  ),
+                  _sameDay(log.timestamp, now) &&
+                  !_isApplicationFaceLogin(log),
             )
             .length;
-        final pendingReview = users.where((user) => user.isPending).length;
+        final pendingReview = users.where(_needsAdminReview).length;
         final recentLogs = [...logs]
           ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
@@ -940,18 +945,6 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
         return StreamBuilder<List<AccessGrant>>(
           stream: firebase.watchAccessGrants(limit: 300),
           builder: (context, grantSnapshot) {
-            final grants = grantSnapshot.data ?? const <AccessGrant>[];
-            final grantsByUser = <String, int>{};
-            final now = DateTime.now();
-            for (final grant in grants) {
-              if (grant.isActiveAt(now)) {
-                grantsByUser.update(
-                  grant.userId,
-                  (count) => count + 1,
-                  ifAbsent: () => 1,
-                );
-              }
-            }
             return StreamBuilder<List<RoomAccessRecord>>(
               stream: firebase.watchActiveRoomSessions(),
               builder: (context, sessionSnapshot) {
@@ -1038,10 +1031,7 @@ class _UserDirectoryTabState extends State<_UserDirectoryTab> {
                           padding: const EdgeInsets.only(bottom: 10),
                           child: _UserDirectoryCard(
                             user: user,
-                            permissionCount: math.max(
-                              user.assignedRooms.length,
-                              grantsByUser[user.id] ?? 0,
-                            ),
+                            permissionCount: _displayRoomsForUser(user).length,
                             activeSession: activeSessionsByUser[user.id],
                             activeRoomAvailable: _activeSessionRoomAvailable(
                               areas,
@@ -1411,7 +1401,18 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                   const SizedBox(height: 10),
                   _PositionToggle(
                     value: _position,
-                    onChanged: (value) => setState(() => _position = value),
+                    onChanged: (value) => setState(() {
+                      _position = value;
+                      if (_position == 'Staff' && _selectedRooms.length > 1) {
+                        final room = _selectedRooms.last;
+                        _selectedRooms
+                          ..clear()
+                          ..add(room);
+                      }
+                      if (_position == 'Staff') {
+                        _endAt = _startAt.add(const Duration(days: 90));
+                      }
+                    }),
                   ),
                   if (_position == 'Student') ...[
                     const SizedBox(height: 10),
@@ -1473,14 +1474,23 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
                   ),
                   const SizedBox(height: 10),
                   _RoomMultiSelectField(
-                    title: 'Room Schedule',
+                    title: _position == 'Staff'
+                        ? 'Managed Room'
+                        : 'Room Schedule',
                     options: roomOptions,
                     selected: _selectedRooms,
                     onChanged: (rooms) {
                       setState(() {
                         _selectedRooms
                           ..clear()
-                          ..addAll(rooms);
+                          ..addAll(
+                            _position == 'Staff' && rooms.isNotEmpty
+                                ? [rooms.last]
+                                : rooms,
+                          );
+                        if (_position == 'Staff') {
+                          _endAt = _startAt.add(const Duration(days: 90));
+                        }
                       });
                     },
                   ),
@@ -1544,6 +1554,12 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
     final firebase = context.read<FirebaseService>();
     final department = _selectedDepartment;
     final temporaryPassword = _generateTemporaryPassword();
+    final assignedRooms = _position == 'Staff'
+        ? [_selectedRooms.first]
+        : _selectedRooms;
+    final assignmentEnd = _position == 'Staff'
+        ? _startAt.add(const Duration(days: 90))
+        : _endAt;
     try {
       final created = await firebase.createManagedUser(
         name: _name.text,
@@ -1552,22 +1568,22 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
         temporaryPassword: temporaryPassword,
         department: department,
         phone: _phone.text,
-        room: _selectedRooms.first,
-        rooms: _selectedRooms,
+        room: assignedRooms.first,
+        rooms: assignedRooms,
         role: 'user',
         accessLevel: _accessLevel,
         position: _position,
         course: _position == 'Student' ? _programmeChoice : department,
       );
       final assignedUser = created.copyWith(
-        room: _selectedRooms.first,
-        rooms: _selectedRooms,
+        room: assignedRooms.first,
+        rooms: assignedRooms,
         status: 'approved',
         position: _position,
         course: _position == 'Student' ? _programmeChoice : department,
       );
       for (final area in widget.areas) {
-        if (!_selectedRooms.any(
+        if (!assignedRooms.any(
           (room) => _sameAccessTarget(room, _roomLabel(area)),
         )) {
           continue;
@@ -1576,16 +1592,16 @@ class _NewRegistrationCardState extends State<_NewRegistrationCard> {
           user: assignedUser,
           area: area,
           startAt: _startAt,
-          endAt: _endAt,
+          endAt: assignmentEnd,
         );
       }
       await firebase.approveUserAccess(
         userId: created.id,
-        room: _selectedRooms.first,
-        rooms: _selectedRooms,
+        room: assignedRooms.first,
+        rooms: assignedRooms,
         accessLevel: _accessLevel,
         accessValidFrom: _startAt,
-        accessValidUntil: _endAt,
+        accessValidUntil: assignmentEnd,
       );
       if (!mounted) return;
       setState(() {
@@ -1972,9 +1988,7 @@ class _UserDirectoryCard extends StatelessWidget {
     final name = user.name.trim().isEmpty ? 'syed' : user.name.trim();
     final role = user.roleLabel.trim().isEmpty ? 'Staff' : user.roleLabel;
     final faceStatus = user.hasFace ? 'Verified' : 'Not enrolled';
-    final rooms = user.assignedRooms
-        .where((room) => room.trim().isNotEmpty)
-        .toList(growable: false);
+    final rooms = _displayRoomsForUser(user);
     final photo = _profileImage(user.photoUrl);
     return GlassCard(
       padding: const EdgeInsets.all(14),
@@ -2052,8 +2066,8 @@ class _UserDirectoryCard extends StatelessWidget {
                             ? 'Not in any room'
                             : 'Not in room ($permissionCount registered)')
                       : activeRoomAvailable == false
-                      ? '${activeSession!.areaName} (Access off)'
-                      : activeSession!.areaName,
+                      ? '${_normalizedRoomDisplay(activeSession!.areaName)} (Access off)'
+                      : _normalizedRoomDisplay(activeSession!.areaName),
                 ),
               ),
             ],
@@ -2478,7 +2492,18 @@ class _UserEditPanelState extends State<_UserEditPanel> {
                   const SizedBox(height: 10),
                   _PositionToggle(
                     value: _position,
-                    onChanged: (value) => setState(() => _position = value),
+                    onChanged: (value) => setState(() {
+                      _position = value;
+                      if (_position == 'Staff' && _rooms.length > 1) {
+                        final room = _rooms.last;
+                        _rooms
+                          ..clear()
+                          ..add(room);
+                      }
+                      if (_position == 'Staff') {
+                        _grantEnd = _grantStart.add(const Duration(days: 90));
+                      }
+                    }),
                   ),
                   const SizedBox(height: 10),
                   _ResponsiveFields(
@@ -2497,10 +2522,16 @@ class _UserEditPanelState extends State<_UserEditPanel> {
                   ),
                   const SizedBox(height: 10),
                   _RoomMultiSelectField(
-                    title: 'Room Schedule',
+                    title: _position == 'Staff'
+                        ? 'Managed Room'
+                        : 'Room Schedule',
                     options: widget.areas.map(_roomLabel).toList(),
                     selected: _rooms,
-                    onChanged: (rooms) => setState(() => _rooms = rooms),
+                    onChanged: (rooms) => setState(
+                      () => _rooms = _position == 'Staff' && rooms.isNotEmpty
+                          ? [rooms.last]
+                          : rooms,
+                    ),
                   ),
                   const SizedBox(height: 18),
                   FilledButton.icon(
@@ -2534,14 +2565,24 @@ class _UserEditPanelState extends State<_UserEditPanel> {
     final department = _departmentChoice == 'Other...'
         ? _department.text.trim()
         : _departmentChoice;
+    final assignedRooms = _position == 'Staff' && _rooms.isNotEmpty
+        ? [_rooms.first]
+        : _rooms;
+    final assignmentEnd = _position == 'Staff'
+        ? _grantStart.add(const Duration(days: 90))
+        : _grantEnd;
     final updated = widget.user.copyWith(
       name: _name.text.trim(),
       identityNumber: _identity.text.trim(),
       email: _email.text.trim(),
       department: department,
+      course: _position == 'Student' ? department : widget.user.course,
+      faculty: widget.user.faculty.trim().isEmpty
+          ? 'FSKTM'
+          : widget.user.faculty,
       phone: _phone.text.trim(),
-      room: _rooms.isEmpty ? '' : _rooms.first,
-      rooms: _rooms,
+      room: assignedRooms.isEmpty ? '' : assignedRooms.first,
+      rooms: assignedRooms,
       role: 'User',
       position: _position,
       status: 'approved',
@@ -2550,14 +2591,14 @@ class _UserEditPanelState extends State<_UserEditPanel> {
     try {
       final firebase = context.read<FirebaseService>();
       await firebase.updateUserProfile(updated);
-      for (final room in _rooms) {
+      for (final room in assignedRooms) {
         final area = _areaForRoom(room);
         if (area == null) continue;
         await firebase.grantRoomAccess(
           user: updated,
           area: area,
           startAt: _grantStart,
-          endAt: _grantEnd,
+          endAt: assignmentEnd,
           approveUser: false,
         );
       }
@@ -3259,7 +3300,9 @@ class _RoomAssetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final occupants =
-        activeSessions.where((session) => session.areaId == area.id).toList()
+        activeSessions
+            .where((session) => _sessionBelongsToArea(session, area))
+            .toList()
           ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return GlassCard(
       onTap: onToggle,
@@ -3285,7 +3328,7 @@ class _RoomAssetCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _roomLabel(area),
+                      _roomLevelTitle(area),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -3294,7 +3337,7 @@ class _RoomAssetCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      _roomSubtitle(area),
+                      _roomDetailTitle(area),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w700),
@@ -3967,7 +4010,7 @@ class _RoomEditSheetState extends State<_RoomEditSheet> {
                   Expanded(
                     child: TextField(
                       controller: _room,
-                      decoration: const InputDecoration(labelText: 'Room'),
+                      decoration: const InputDecoration(labelText: 'Room Code'),
                     ),
                   ),
                 ],
@@ -4053,6 +4096,12 @@ class _RoomEditSheetState extends State<_RoomEditSheet> {
   }
 
   Future<void> _save() async {
+    if (_room.text.trim().isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Room code is required.')));
+      return;
+    }
     setState(() => _saving = true);
     final next = widget.area.copyWith(
       name: _name.text.trim(),
@@ -4081,6 +4130,7 @@ class _EntryTimelineTab extends StatefulWidget {
 
 class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   final _search = TextEditingController();
+  late int _visibleLimit;
   String _status = 'all';
   String _room = 'all';
   String _period = 'all';
@@ -4088,6 +4138,12 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   String _historyStatus = 'all';
   bool _showRoomHistory = false;
   DateTime? _selectedDate;
+
+  @override
+  void initState() {
+    super.initState();
+    _visibleLimit = widget.initialLimit;
+  }
 
   @override
   void dispose() {
@@ -4098,10 +4154,16 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<LogProvider>();
+    final areas = context.watch<AreaProvider>().areas;
     final sourceLogs = provider.logs;
-    final roomOptions = _roomOptions(sourceLogs);
-    final filteredLogs = _filtered(sourceLogs);
-    final visibleLogs = filteredLogs.take(widget.initialLimit).toList();
+    final roomOptions = _roomOptions(areas);
+    final selectedRoom = roomOptions.contains(_room) ? _room : 'all';
+    final filteredLogs = _filtered(
+      sourceLogs,
+      areas: areas,
+      selectedRoom: selectedRoom,
+    );
+    final visibleLogs = filteredLogs.take(_visibleLimit).toList();
     final grantedCount = filteredLogs.where((log) => log.granted).length;
     final deniedCount = filteredLogs.length - grantedCount;
     return ListView(
@@ -4147,7 +4209,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
               SizedBox(
                 width: 220,
                 child: DropdownButtonFormField<String>(
-                  initialValue: roomOptions.contains(_room) ? _room : 'all',
+                  initialValue: selectedRoom,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Room'),
                   items: [
@@ -4243,9 +4305,18 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
             ),
             builder: (context, snapshot) {
               final sourceRecords = snapshot.data ?? const <RoomAccessRecord>[];
+              final historyRoomOptions = _roomHistoryRoomOptions(
+                sourceRecords,
+                areas,
+              );
+              final selectedHistoryRoom = historyRoomOptions.contains(_room)
+                  ? _room
+                  : 'all';
               final userOptions = _roomHistoryUserOptions(
                 _filteredRoomRecords(
                   sourceRecords,
+                  areas: areas,
+                  selectedRoom: selectedHistoryRoom,
                   includeUser: false,
                   includeQuery: false,
                 ),
@@ -4253,8 +4324,11 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
               final selectedUser = userOptions.contains(_historyUser)
                   ? _historyUser
                   : 'all';
-              final historyRoomOptions = _roomHistoryRoomOptions(sourceRecords);
-              final records = _filteredRoomRecords(sourceRecords);
+              final records = _filteredRoomRecords(
+                sourceRecords,
+                areas: areas,
+                selectedRoom: selectedHistoryRoom,
+              );
               return Column(
                 children: [
                   _AccessLogPanel(
@@ -4267,9 +4341,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
                       selectedStatus: _historyStatus,
                       selectedUser: selectedUser,
                       userOptions: userOptions,
-                      selectedRoom: historyRoomOptions.contains(_room)
-                          ? _room
-                          : 'all',
+                      selectedRoom: selectedHistoryRoom,
                       roomOptions: historyRoomOptions,
                       selectedDate: _selectedDate,
                       onStatusChanged: (value) =>
@@ -4307,6 +4379,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                       child: _TimelineRow(
                         log: log,
+                        roomName: _normalizedRoomDisplay(log.areaName),
                         onTap: () => _showSecurityDetail(context, log),
                       ),
                     ),
@@ -4330,9 +4403,15 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
                         'Denied: $deniedCount',
                         style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
-                      if (provider.logs.length > widget.initialLimit)
+                      if (filteredLogs.length > _visibleLimit ||
+                          provider.logs.length >= provider.limit)
                         TextButton.icon(
-                          onPressed: provider.loadMore,
+                          onPressed: () {
+                            setState(() => _visibleLimit += 100);
+                            if (provider.logs.length <= _visibleLimit) {
+                              provider.loadMore();
+                            }
+                          },
                           icon: const Icon(Icons.expand_more_rounded),
                           label: const Text('Load more'),
                         ),
@@ -4357,6 +4436,8 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
 
   List<AccessLog> _filtered(
     List<AccessLog> logs, {
+    required List<Area> areas,
+    required String selectedRoom,
     bool includeStatus = true,
     bool includeQuery = true,
   }) {
@@ -4364,7 +4445,13 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
     return logs.where((log) {
       if (includeStatus && _status == 'granted' && !log.granted) return false;
       if (includeStatus && _status == 'denied' && log.granted) return false;
-      if (_room != 'all' && _accessKey(log.areaName) != _accessKey(_room)) {
+      if (selectedRoom != 'all' &&
+          !_matchesSelectedRoom(
+            areaId: log.areaId,
+            areaName: log.areaName,
+            selectedRoom: selectedRoom,
+            areas: areas,
+          )) {
         return false;
       }
       if (_selectedDate != null && !_sameDay(log.timestamp, _selectedDate!)) {
@@ -4374,7 +4461,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
       if (query.isEmpty) return true;
       return [
         _logUserName(log),
-        log.areaName,
+        _normalizedRoomDisplay(log.areaName),
         log.status,
         log.reason,
       ].join(' ').toLowerCase().contains(query);
@@ -4383,12 +4470,20 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
 
   List<RoomAccessRecord> _filteredRoomRecords(
     List<RoomAccessRecord> records, {
+    required List<Area> areas,
+    required String selectedRoom,
     bool includeUser = true,
     bool includeQuery = true,
   }) {
     final query = includeQuery ? _search.text.trim().toLowerCase() : '';
     return records.where((record) {
-      if (_room != 'all' && _accessKey(record.areaName) != _accessKey(_room)) {
+      if (selectedRoom != 'all' &&
+          !_matchesSelectedRoom(
+            areaId: record.areaId,
+            areaName: record.areaName,
+            selectedRoom: selectedRoom,
+            areas: areas,
+          )) {
         return false;
       }
       if (includeUser &&
@@ -4406,7 +4501,7 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
       if (query.isNotEmpty &&
           ![
             record.userName,
-            record.areaName,
+            _normalizedRoomDisplay(record.areaName),
             record.event,
             record.reason,
           ].join(' ').toLowerCase().contains(query)) {
@@ -4425,17 +4520,6 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
             .toList()
           ..sort();
     return ['all', ...users];
-  }
-
-  List<String> _roomHistoryRoomOptions(List<RoomAccessRecord> records) {
-    final rooms =
-        records
-            .map((record) => record.areaName.trim())
-            .where((room) => room.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort();
-    return ['all', ...rooms];
   }
 
   Future<void> _exportAccessLogReport(
@@ -4492,15 +4576,47 @@ class _EntryTimelineTabState extends State<_EntryTimelineTab> {
     }
   }
 
-  List<String> _roomOptions(List<AccessLog> logs) {
-    final rooms = {
-      ...commandCenterRoomNames,
-      ...logs
-          .where((log) => !_isApplicationFaceLogin(log))
-          .map((log) => log.areaName.trim())
-          .where((room) => room.isNotEmpty),
-    }.toList()..sort();
+  List<String> _roomOptions(List<Area> areas) {
+    final rooms = _dedupeRooms(areas.map(_roomLabel))..sort();
     return ['all', ...rooms];
+  }
+
+  List<String> _roomHistoryRoomOptions(
+    List<RoomAccessRecord> records,
+    List<Area> areas,
+  ) {
+    final rooms = _dedupeRooms([
+      ...areas.map(_roomLabel),
+      ...records
+          .map((record) => _normalizedRoomDisplay(record.areaName))
+          .where(
+            (room) =>
+                room.isNotEmpty &&
+                _accessKey(room) != _accessKey('Application Face Login'),
+          ),
+    ])..sort();
+    return ['all', ...rooms];
+  }
+
+  bool _matchesSelectedRoom({
+    required String areaId,
+    required String areaName,
+    required String selectedRoom,
+    required List<Area> areas,
+  }) {
+    final normalizedAreaName = _normalizedRoomDisplay(areaName);
+    if (_accessKey(normalizedAreaName) ==
+        _accessKey('Application Face Login')) {
+      return false;
+    }
+    final selectedKey = _accessKey(selectedRoom);
+    if (_accessKey(normalizedAreaName) == selectedKey) return true;
+    for (final area in areas) {
+      if (!_roomAccessKeys(area).contains(selectedKey)) continue;
+      if (areaId.trim().isNotEmpty && areaId == area.id) return true;
+      return _roomAccessKeys(area).contains(_accessKey(normalizedAreaName));
+    }
+    return false;
   }
 
   Future<void> _pickLogDate() async {
@@ -4527,9 +4643,10 @@ class _RoomActivityDistribution extends StatelessWidget {
   Widget build(BuildContext context) {
     final counts = <String, _RoomActivityCount>{};
     for (final record in records.where((record) => record.isEntry)) {
-      final room = record.areaName.trim().isEmpty
+      final normalizedRoom = _normalizedRoomDisplay(record.areaName);
+      final room = normalizedRoom.trim().isEmpty
           ? 'Unknown room'
-          : record.areaName.trim();
+          : normalizedRoom.trim();
       final count = counts.putIfAbsent(room, _RoomActivityCount.new);
       final userName = record.userName.trim().isEmpty
           ? 'Unknown user'
@@ -5008,6 +5125,7 @@ class _RoomSessionLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      onTap: () => _showRoomSessionDetail(context, row),
       dense: true,
       contentPadding: EdgeInsets.zero,
       leading: Icon(
@@ -5015,7 +5133,7 @@ class _RoomSessionLine extends StatelessWidget {
         color: row.open ? const Color(0xFFF59E0B) : const Color(0xFF16A34A),
       ),
       title: Text(
-        '${row.userName} - ${row.roomName}',
+        '${row.userName} - ${_normalizedRoomDisplay(row.roomName)}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w900),
@@ -5047,6 +5165,41 @@ class _RoomSessionLine extends StatelessWidget {
       ),
     );
   }
+}
+
+void _showRoomSessionDetail(BuildContext context, _RoomSessionRow row) {
+  showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Room History Detail'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DetailLine(label: 'User', value: row.userName),
+          _DetailLine(
+            label: 'Room',
+            value: _normalizedRoomDisplay(row.roomName),
+          ),
+          _DetailLine(label: 'Status', value: row.open ? 'OPEN' : 'CLOSED'),
+          _DetailLine(label: 'In', value: _preciseDate(row.entryAt)),
+          _DetailLine(
+            label: 'Out',
+            value: row.exitAt == null
+                ? 'Still inside'
+                : _preciseDate(row.exitAt!),
+          ),
+          _DetailLine(label: 'Duration', value: _durationLabel(row.duration)),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _ReportPill extends StatelessWidget {
@@ -5219,9 +5372,14 @@ String _logUserName(AccessLog log) {
 }
 
 class _TimelineRow extends StatelessWidget {
-  const _TimelineRow({required this.log, required this.onTap});
+  const _TimelineRow({
+    required this.log,
+    required this.roomName,
+    required this.onTap,
+  });
 
   final AccessLog log;
+  final String roomName;
   final VoidCallback onTap;
 
   @override
@@ -5245,7 +5403,7 @@ class _TimelineRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${log.userName} | ${log.areaName}',
+                  '${log.userName} | $roomName',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w900),
@@ -5332,7 +5490,10 @@ void _showSecurityDetail(BuildContext context, AccessLog log) {
               const SizedBox(height: 12),
               _DetailLine(label: 'Result', value: log.status.toUpperCase()),
               _DetailLine(label: 'User', value: log.userName),
-              _DetailLine(label: 'Room', value: log.areaName),
+              _DetailLine(
+                label: 'Room',
+                value: _normalizedRoomDisplay(log.areaName),
+              ),
               _DetailLine(
                 label: 'Timestamp',
                 value: _preciseDate(log.timestamp),
@@ -5532,6 +5693,7 @@ class _UserDeepDetailPage extends StatelessWidget {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: _TimelineRow(
                         log: log,
+                        roomName: _normalizedRoomDisplay(log.areaName),
                         onTap: () => _showSecurityDetail(context, log),
                       ),
                     ),
@@ -6029,20 +6191,76 @@ bool _sameDay(DateTime left, DateTime right) =>
 String _roomLabel(Area area) {
   final name = area.name.trim();
   final room = area.roomNumber.trim();
+  final level = _shortFloorLabel(area.floor);
+  final prefix = level.isEmpty ? '' : '($level) ';
+  if (room.isNotEmpty && name.isNotEmpty) return '$prefix$room - $name';
   if (name.isNotEmpty) return name;
   if (room.isNotEmpty) return 'Room $room';
   return area.location.trim().isEmpty ? 'Room Asset' : area.location.trim();
 }
 
+String _roomLevelTitle(Area area) {
+  final level = _shortFloorLabel(area.floor);
+  return level.isEmpty ? '(Level)' : '($level)';
+}
+
+String _roomDetailTitle(Area area) {
+  final name = area.name.trim();
+  final room = area.roomNumber.trim();
+  if (room.isNotEmpty && name.isNotEmpty) return '$room - $name';
+  if (name.isNotEmpty) return name;
+  if (room.isNotEmpty) return room;
+  return area.location.trim().isEmpty ? 'Room Asset' : area.location.trim();
+}
+
+String _normalizedRoomDisplay(String value) {
+  final room = value.trim();
+  final key = _accessKey(room);
+  if (key.isEmpty) return room;
+  const legacyRooms = {
+    'ictoffice': '(L2) ICT-01 - ICT Office',
+    'ictroomoffice': '(L2) ICT-01 - ICT Office',
+    'ict01': '(L2) ICT-01 - ICT Office',
+    'itdevelopmentsuite': '(L3) IT-2 - IT Development Suite',
+    'it2': '(L3) IT-2 - IT Development Suite',
+    'networkcoreoperations': '(L3) NCO-3 - Network Core Operation',
+    'networkcoreoperation': '(L3) NCO-3 - Network Core Operation',
+    'nconetworkoperations': '(L3) NCO-3 - Network Core Operation',
+    'nco3': '(L3) NCO-3 - Network Core Operation',
+    'serverroom': '(L1) SR-1 - Server Room 1',
+    'sr01': '(L1) SR-1 - Server Room 1',
+  };
+  return legacyRooms[key] ?? room;
+}
+
+String _shortFloorLabel(String floor) {
+  final value = floor.trim().toLowerCase().replaceAll(' ', '');
+  if (value.isEmpty) return '';
+  if (value == 'levelg' || value == 'g' || value.contains('ground')) {
+    return 'LG';
+  }
+  final match = RegExp(r'(?:level|l)?(\d+)').firstMatch(value);
+  if (match == null) return floor.trim();
+  return 'L${match.group(1)}';
+}
+
 bool? _activeSessionRoomAvailable(List<Area> areas, RoomAccessRecord? session) {
   if (session == null) return null;
   for (final area in areas) {
-    if (area.id == session.areaId ||
-        _sameAccessTarget(_roomLabel(area), session.areaName)) {
+    if (_sessionBelongsToArea(session, area)) {
       return area.active;
     }
   }
   return false;
+}
+
+bool _sessionBelongsToArea(RoomAccessRecord session, Area area) {
+  if (session.areaId.trim().isNotEmpty && session.areaId == area.id) {
+    return true;
+  }
+  return _roomAccessKeys(
+    area,
+  ).contains(_accessKey(_normalizedRoomDisplay(session.areaName)));
 }
 
 String _uniqueId(AppUser user) {
@@ -6063,7 +6281,12 @@ List<String> _dedupeRooms(Iterable<String> values) {
 }
 
 bool _sameAccessTarget(String left, String right) =>
-    _accessKey(left) == _accessKey(right);
+    _accessKey(_normalizedRoomDisplay(left)) ==
+    _accessKey(_normalizedRoomDisplay(right));
+
+List<String> _displayRoomsForUser(AppUser user) {
+  return _dedupeRooms(user.assignedRooms.map(_normalizedRoomDisplay));
+}
 
 List<Area> _roomsForAccessLevel(List<Area> areas, int accessLevel) {
   final target = accessLevel == 0 ? 'levelg' : 'level$accessLevel';

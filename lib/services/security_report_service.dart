@@ -36,7 +36,7 @@ class SecurityReportService {
           DateFormat("yyyy-MM-dd'T'HH:mm:ss").format(log.timestamp),
           _clean(log.status.toUpperCase()),
           _clean(log.userName),
-          _clean(log.areaName),
+          _clean(_normalizedRoomDisplay(log.areaName)),
           _clean(log.reason),
           log.synced ? 'yes' : 'no',
         ],
@@ -62,7 +62,7 @@ class SecurityReportService {
         [
           _clean(session.sessionId),
           _clean(session.userName),
-          _clean(session.roomName),
+          _clean(_normalizedRoomDisplay(session.roomName)),
           DateFormat("yyyy-MM-dd'T'HH:mm:ss").format(session.entryAt),
           session.exitAt == null
               ? ''
@@ -104,6 +104,26 @@ class SecurityReportService {
         .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
+  }
+
+  String _normalizedRoomDisplay(String value) {
+    final room = value.trim();
+    final key = room.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+    if (key.isEmpty) return room;
+    const legacyRooms = {
+      'ictoffice': '(L2) ICT-01 - ICT Office',
+      'ictroomoffice': '(L2) ICT-01 - ICT Office',
+      'ict01': '(L2) ICT-01 - ICT Office',
+      'itdevelopmentsuite': '(L3) IT-2 - IT Development Suite',
+      'it2': '(L3) IT-2 - IT Development Suite',
+      'networkcoreoperations': '(L3) NCO-3 - Network Core Operation',
+      'networkcoreoperation': '(L3) NCO-3 - Network Core Operation',
+      'nconetworkoperations': '(L3) NCO-3 - Network Core Operation',
+      'nco3': '(L3) NCO-3 - Network Core Operation',
+      'serverroom': '(L1) SR-1 - Server Room 1',
+      'sr01': '(L1) SR-1 - Server Room 1',
+    };
+    return legacyRooms[key] ?? room;
   }
 }
 

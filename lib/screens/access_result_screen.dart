@@ -229,8 +229,12 @@ class _VerifiedDetails extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final room = log?.areaName.trim().isNotEmpty == true
-        ? log!.areaName.trim()
+    final logArea = log?.areaName.trim() ?? '';
+    final isApplicationLogin =
+        logArea.toLowerCase().replaceAll(RegExp(r'\s+'), '') ==
+        'applicationfacelogin';
+    final room = logArea.isNotEmpty && !isApplicationLogin
+        ? logArea
         : user.assignedRoomsLabel;
     final academicValue = user.position.trim().toLowerCase() == 'staff'
         ? user.department
@@ -255,8 +259,12 @@ class _VerifiedDetails extends StatelessWidget {
         ),
         _ResultLine(label: 'Category', value: user.roleLabel),
         _ResultLine(
-          label: 'Room Status',
-          value: user.isAdmin ? 'Available' : _valueOrUnavailable(room),
+          label: isApplicationLogin ? 'Access Status' : 'Room Status',
+          value: isApplicationLogin
+              ? 'Application login verified'
+              : user.isAdmin
+              ? 'Available'
+              : _valueOrUnavailable(room),
         ),
         _ResultLine(
           label: user.position.trim().toLowerCase() == 'staff'

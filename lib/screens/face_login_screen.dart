@@ -182,22 +182,23 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
           await _showSuccessAndNavigate(user, log: verifiedLog);
           return;
         }
-        final continueToRoomSelection = await _showVerifiedIdentity(user);
-        if (!continueToRoomSelection) {
-          if (!mounted) return;
-          _setStateAfterFrame(() => _busy = false);
-          await _initCamera();
-          return;
-        }
-        final selectedArea = await _selectRoomAfterRecognition(firebase);
-        if (selectedArea == null) {
-          if (!mounted) return;
-          _setStateAfterFrame(() => _busy = false);
-          await _initCamera();
-          return;
-        }
-        scanArea = selectedArea;
-        scanRoomName = _roomSelectionLabel(selectedArea);
+        final verifiedLog = faceProvider.buildLog(
+          user: user,
+          area: scanArea,
+          areaName: 'Application Face Login',
+          status: 'granted',
+          reason: 'Face identity verified for application login',
+        );
+        await logProvider.record(verifiedLog);
+        authProvider.completeFaceLogin(user);
+        unawaited(
+          firebase
+              .recordAppLogin(user, method: 'face_biometric')
+              .catchError((_) {}),
+        );
+        if (!mounted) return;
+        await _showSuccessAndNavigate(user, log: verifiedLog);
+        return;
       }
 
       if (system.globalLockdown) {
@@ -434,37 +435,6 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     }
   }
 
-  Future<bool> _showVerifiedIdentity(AppUser user) async {
-    if (!mounted) return false;
-    return await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogContext) => AlertDialog(
-            title: const Row(
-              children: [
-                Icon(Icons.verified_user_rounded, color: Color(0xFF16A34A)),
-                SizedBox(width: 10),
-                Text('Verified'),
-              ],
-            ),
-            content: Text(
-              '${user.name.trim().isEmpty ? 'User' : user.name.trim()}\nFace identity verified.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Close'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text('Select Room'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-  }
-
   Future<void> _denyAccess({
     required FaceProvider faceProvider,
     required LogProvider logProvider,
@@ -505,76 +475,6 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     }
     if (!mounted) return;
     _replaceWithAccessResult(user: null, log: log);
-  }
-
-  Future<Area?> _selectRoomAfterRecognition(FirebaseService firebase) async {
-    final snapshot = await firebase.firestore.collection('areas').get();
-    final rooms =
-        snapshot.docs
-            .map((doc) => Area.fromMap(doc.id, doc.data()))
-            .where((area) => area.active)
-            .toList()
-          ..sort(
-            (a, b) => _roomSelectionLabel(a).compareTo(_roomSelectionLabel(b)),
-          );
-    if (!mounted) return null;
-    if (rooms.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No active rooms are available.')),
-      );
-      return null;
-    }
-    var selectedArea = rooms.first;
-    return showDialog<Area>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Select Room'),
-          content: DropdownButtonFormField<String>(
-            initialValue: selectedArea.id,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Room'),
-            items: [
-              for (final room in rooms)
-                DropdownMenuItem(
-                  value: room.id,
-                  child: Text(
-                    _roomSelectionLabel(room),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (value) {
-              if (value == null) return;
-              setDialogState(() {
-                selectedArea = rooms.firstWhere((room) => room.id == value);
-              });
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Close'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, selectedArea),
-              child: const Text('Continue'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _roomSelectionLabel(Area area) {
-    final room = area.roomNumber.trim();
-    final name = area.name.trim();
-    if (room.isNotEmpty && name.isNotEmpty) return '$room - $name';
-    if (room.isNotEmpty) return room;
-    if (name.isNotEmpty) return name;
-    return area.id;
   }
 
   Area _activeAreaFromProvider() {
@@ -713,6 +613,7 @@ class _FaceLoginScreenState extends State<FaceLoginScreen> {
     final name = area.name.trim();
     final floor = area.floor.trim();
     final roomNumber = area.roomNumber.trim();
+    if (name.isNotEmpty && roomNumber.isNotEmpty) return '$roomNumber - $name';
     if (name.isNotEmpty && floor.isNotEmpty) return '$floor - $name';
     if (name.isNotEmpty) return name;
     if (floor.isNotEmpty && roomNumber.isNotEmpty) {

@@ -65,7 +65,9 @@ class AppUser {
   final DateTime? accessValidFrom;
   final DateTime? accessValidUntil;
 
-  bool get isAdmin => role.trim().toLowerCase() == 'admin';
+  bool get isAdmin =>
+      role.trim().toLowerCase() == 'admin' ||
+      _accessKey(name).contains(_accessKey('Dr. MOHD ZANES BIN SAHID'));
   bool get isApproved => status.trim().toLowerCase() == 'approved';
   bool get isPending => status.trim().toLowerCase() == 'pending';
   bool get hasPendingPhotoApproval =>

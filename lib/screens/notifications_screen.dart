@@ -29,7 +29,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      unawaited(context.read<AlertProvider>().markAllRead().catchError((_) {}));
+      Future<void>.delayed(const Duration(milliseconds: 700), () {
+        if (!mounted) return;
+        unawaited(
+          context.read<AlertProvider>().markAllRead().catchError((_) {}),
+        );
+      });
     });
   }
 
@@ -112,6 +117,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                           timestamp: _documentCreatedAt(
                                             notification,
                                           ),
+                                          priority: _adminNotificationPriority(
+                                            notification,
+                                          ),
                                           child: _AdminNotificationCard(
                                             doc: notification,
                                           ),
@@ -121,6 +129,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                           timestamp: _documentCreatedAt(
                                             request,
                                           ),
+                                          priority: 1,
                                           child: _ProfilePhotoRequestCard(
                                             doc: request,
                                           ),
@@ -130,6 +139,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                           timestamp: _documentCreatedAt(
                                             request,
                                           ),
+                                          priority: 1,
                                           child: _ProfileChangeRequestCard(
                                             doc: request,
                                           ),
@@ -139,6 +149,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                           timestamp: _documentCreatedAt(
                                             request,
                                           ),
+                                          priority: 1,
                                           child: _SupportRequestCard(
                                             doc: request,
                                           ),
@@ -148,6 +159,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                           timestamp: _documentCreatedAt(
                                             request,
                                           ),
+                                          priority: 1,
                                           child: _PasswordResetRequestCard(
                                             doc: request,
                                           ),
@@ -155,6 +167,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                       for (final request in requests)
                                         _DatedNotificationItem(
                                           timestamp: request.createdAt,
+                                          priority: 0,
                                           child: _RoomRequestCard(
                                             request: request,
                                           ),
@@ -162,12 +175,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                       for (final alert in alerts)
                                         _DatedNotificationItem(
                                           timestamp: alert.timestamp,
+                                          priority: alert.read ? 4 : 2,
                                           child: _AlertCard(alert: alert),
                                         ),
-                                    ]..sort(
-                                      (a, b) =>
-                                          b.timestamp.compareTo(a.timestamp),
-                                    );
+                                    ]..sort((a, b) {
+                                      final priority = a.priority.compareTo(
+                                        b.priority,
+                                      );
+                                      if (priority != 0) return priority;
+                                      return b.timestamp.compareTo(a.timestamp);
+                                    });
                                 return ListView(
                                   padding: const EdgeInsets.all(18),
                                   children: [
@@ -201,10 +218,50 @@ DateTime _documentCreatedAt(
 }
 
 class _DatedNotificationItem {
-  const _DatedNotificationItem({required this.timestamp, required this.child});
+  const _DatedNotificationItem({
+    required this.timestamp,
+    required this.child,
+    this.priority = 3,
+  });
 
   final DateTime timestamp;
   final Widget child;
+  final int priority;
+}
+
+int _adminNotificationPriority(
+  QueryDocumentSnapshot<Map<String, dynamic>> notification,
+) {
+  final data = notification.data();
+  final unread = data['read'] != true;
+  final type = (data['type'] ?? '').toString();
+  if (unread && type == 'first_login') return 0;
+  if (unread) return 2;
+  return 4;
+}
+
+class _HighlightedRequestCard extends StatelessWidget {
+  const _HighlightedRequestCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF22D3EE).withValues(alpha: .3),
+            blurRadius: 14,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
 }
 
 class _AdminNotificationCard extends StatelessWidget {
@@ -289,37 +346,39 @@ class _SupportRequestCard extends StatelessWidget {
     final message = (data['message'] ?? '').toString();
     final timestamp =
         (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Help & Support Request',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '$userName\n'
-            '$email\n'
-            'Contact: $contact\n'
-            '${DateFormat.yMMMd().add_jm().format(timestamp)}',
-          ),
-          const SizedBox(height: 8),
-          Text(subject, style: const TextStyle(fontWeight: FontWeight.w900)),
-          const SizedBox(height: 4),
-          Text(message),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () => firebase.firestore
-                .collection('supportRequests')
-                .doc(doc.id)
-                .set({
-                  'status': 'handled',
-                  'handledAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true)),
-            child: const Text('Mark Handled'),
-          ),
-        ],
+    return _HighlightedRequestCard(
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Help & Support Request',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '$userName\n'
+              '$email\n'
+              'Contact: $contact\n'
+              '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+            ),
+            const SizedBox(height: 8),
+            Text(subject, style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text(message),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => firebase.firestore
+                  .collection('supportRequests')
+                  .doc(doc.id)
+                  .set({
+                    'status': 'handled',
+                    'handledAt': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true)),
+              child: const Text('Mark Handled'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -342,51 +401,53 @@ class _ProfilePhotoRequestCard extends StatelessWidget {
         (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
     final file = photoUrl.trim().isEmpty ? null : File(photoUrl);
     final image = file != null && file.existsSync() ? FileImage(file) : null;
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Profile Picture Request',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              CircleAvatar(
-                radius: 32,
-                backgroundImage: image,
-                child: image == null
-                    ? const Icon(Icons.person_rounded, size: 30)
-                    : null,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '$userName requested a new profile picture.\n'
-                  '$email\n'
-                  '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+    return _HighlightedRequestCard(
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Profile Picture Request',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 32,
+                  backgroundImage: image,
+                  child: image == null
+                      ? const Icon(Icons.person_rounded, size: 30)
+                      : null,
                 ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '$userName requested a new profile picture.\n'
+                    '$email\n'
+                    '${DateFormat.yMMMd().add_jm().format(timestamp)}',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _DecisionButtons(
+              approveLabel: 'Approve',
+              denyLabel: 'Deny',
+              onApprove: () => firebase.decideProfilePhotoRequest(
+                requestId: doc.id,
+                userId: userId,
+                approved: true,
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _DecisionButtons(
-            approveLabel: 'Approve',
-            denyLabel: 'Deny',
-            onApprove: () => firebase.decideProfilePhotoRequest(
-              requestId: doc.id,
-              userId: userId,
-              approved: true,
+              onDeny: () => firebase.decideProfilePhotoRequest(
+                requestId: doc.id,
+                userId: userId,
+                approved: false,
+              ),
             ),
-            onDeny: () => firebase.decideProfilePhotoRequest(
-              requestId: doc.id,
-              userId: userId,
-              approved: false,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -409,50 +470,52 @@ class _ProfileChangeRequestCard extends StatelessWidget {
     );
     final timestamp =
         (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Profile Change Request',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '$userName\n'
-            '$email\n'
-            '${DateFormat.yMMMd().add_jm().format(timestamp)}',
-          ),
-          const SizedBox(height: 10),
-          _RequestDetail(label: 'Name', value: requested['name']),
-          _RequestDetail(label: 'Department', value: requested['department']),
-          _RequestDetail(label: 'Phone', value: requested['phone']),
-          _RequestDetail(
-            label: 'Home Address',
-            value: requested['homeAddress'],
-          ),
-          _RequestDetail(
-            label: 'Emergency Contact',
-            value: requested['emergencyContact'],
-          ),
-          const SizedBox(height: 12),
-          _DecisionButtons(
-            approveLabel: 'Approve',
-            denyLabel: 'Deny',
-            onApprove: () => firebase.decideProfileChangeRequest(
-              requestId: doc.id,
-              userId: userId,
-              approved: true,
-              requested: requested,
+    return _HighlightedRequestCard(
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Profile Change Request',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
             ),
-            onDeny: () => firebase.decideProfileChangeRequest(
-              requestId: doc.id,
-              userId: userId,
-              approved: false,
-              requested: requested,
+            const SizedBox(height: 6),
+            Text(
+              '$userName\n'
+              '$email\n'
+              '${DateFormat.yMMMd().add_jm().format(timestamp)}',
             ),
-          ),
-        ],
+            const SizedBox(height: 10),
+            _RequestDetail(label: 'Name', value: requested['name']),
+            _RequestDetail(label: 'Department', value: requested['department']),
+            _RequestDetail(label: 'Phone', value: requested['phone']),
+            _RequestDetail(
+              label: 'Home Address',
+              value: requested['homeAddress'],
+            ),
+            _RequestDetail(
+              label: 'Emergency Contact',
+              value: requested['emergencyContact'],
+            ),
+            const SizedBox(height: 12),
+            _DecisionButtons(
+              approveLabel: 'Approve',
+              denyLabel: 'Deny',
+              onApprove: () => firebase.decideProfileChangeRequest(
+                requestId: doc.id,
+                userId: userId,
+                approved: true,
+                requested: requested,
+              ),
+              onDeny: () => firebase.decideProfileChangeRequest(
+                requestId: doc.id,
+                userId: userId,
+                approved: false,
+                requested: requested,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -472,36 +535,38 @@ class _PasswordResetRequestCard extends StatelessWidget {
     final email = (data['email'] ?? '').toString();
     final timestamp =
         (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Password Reset Request',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '$userName requested a temporary password.\n'
-            '$email\n'
-            '${DateFormat.yMMMd().add_jm().format(timestamp)}',
-          ),
-          const SizedBox(height: 12),
-          _DecisionButtons(
-            approveLabel: 'Approve',
-            denyLabel: 'Deny',
-            onApprove: () => firebase.decidePasswordResetRequest(
-              requestId: doc.id,
-              userId: userId,
-              approved: true,
+    return _HighlightedRequestCard(
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Password Reset Request',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
             ),
-            onDeny: () => firebase.decidePasswordResetRequest(
-              requestId: doc.id,
-              userId: userId,
-              approved: false,
+            const SizedBox(height: 6),
+            Text(
+              '$userName requested a temporary password.\n'
+              '$email\n'
+              '${DateFormat.yMMMd().add_jm().format(timestamp)}',
             ),
-          ),
-        ],
+            const SizedBox(height: 12),
+            _DecisionButtons(
+              approveLabel: 'Approve',
+              denyLabel: 'Deny',
+              onApprove: () => firebase.decidePasswordResetRequest(
+                requestId: doc.id,
+                userId: userId,
+                approved: true,
+              ),
+              onDeny: () => firebase.decidePasswordResetRequest(
+                requestId: doc.id,
+                userId: userId,
+                approved: false,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -515,38 +580,41 @@ class _RoomRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final firebase = context.read<FirebaseService>();
-    return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Room Access Request',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${request.userName} wants to enter ${request.areaName}.\n'
-            '${DateFormat.yMMMd().add_jm().format(request.createdAt)}',
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => _decide(context, firebase, true),
-                  child: const Text('Allow'),
+    return _HighlightedRequestCard(
+      child: GlassCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Room Access Request',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${request.userName} wants to enter ${request.areaName}.\n'
+              '${_roomRequestStatus(request)}\n'
+              '${DateFormat.yMMMd().add_jm().format(request.createdAt)}',
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => _decide(context, firebase, true),
+                    child: const Text('Allow'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _decide(context, firebase, false),
-                  child: const Text('Deny'),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => _decide(context, firebase, false),
+                    child: const Text('Deny'),
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -575,6 +643,17 @@ class _RoomRequestCard extends StatelessWidget {
       messenger.showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
+}
+
+String _roomRequestStatus(RoomAccessRequest request) {
+  final previous = request.previousRoomName.trim();
+  if (request.exitedPreviousRoom) {
+    return 'Room status: User already exited ${previous.isEmpty ? 'the previous room' : previous}.';
+  }
+  if (previous.isNotEmpty) {
+    return 'Room status: User has not exited $previous yet.';
+  }
+  return 'Room status: No active room session found before request.';
 }
 
 class _RequestDetail extends StatelessWidget {
@@ -638,27 +717,44 @@ class _AlertCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _severityColor(alert.severity);
-    return GlassCard(
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: CircleAvatar(
-          backgroundColor: color.withValues(alpha: .16),
-          child: Icon(_severityIcon(alert.severity), color: color),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 240),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: alert.read
+            ? const []
+            : [
+                BoxShadow(
+                  color: color.withValues(alpha: .3),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
+              ],
+      ),
+      child: GlassCard(
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: CircleAvatar(
+            backgroundColor: color.withValues(alpha: alert.read ? .12 : .2),
+            child: Icon(_severityIcon(alert.severity), color: color),
+          ),
+          title: Text(
+            alert.title,
+            style: TextStyle(
+              fontWeight: alert.read ? FontWeight.w800 : FontWeight.w900,
+            ),
+          ),
+          subtitle: Text(
+            '${alert.body}\n${DateFormat.yMMMd().add_jm().format(alert.timestamp)}',
+          ),
+          trailing: Chip(
+            visualDensity: VisualDensity.compact,
+            label: Text(alert.read ? alert.severity : 'NEW'),
+            side: BorderSide(color: color.withValues(alpha: .32)),
+            backgroundColor: color.withValues(alpha: alert.read ? .10 : .16),
+          ),
+          isThreeLine: true,
         ),
-        title: Text(
-          alert.title,
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-        subtitle: Text(
-          '${alert.body}\n${DateFormat.yMMMd().add_jm().format(alert.timestamp)}',
-        ),
-        trailing: Chip(
-          visualDensity: VisualDensity.compact,
-          label: Text(alert.severity),
-          side: BorderSide(color: color.withValues(alpha: .32)),
-          backgroundColor: color.withValues(alpha: .10),
-        ),
-        isThreeLine: true,
       ),
     );
   }

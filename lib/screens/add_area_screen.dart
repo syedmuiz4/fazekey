@@ -183,6 +183,7 @@ class _AddRoomsHeader extends StatelessWidget {
 
 class _RoomDraft {
   final name = TextEditingController();
+  final code = TextEditingController();
   final floor = TextEditingController();
   final capacity = TextEditingController(text: '25');
   String floorChoice = commandCenterFloorOptions.first;
@@ -199,7 +200,7 @@ class _RoomDraft {
       name: roomName,
       location: 'FSKTM',
       floor: floorLabel,
-      roomNumber: roomName,
+      roomNumber: code.text.trim(),
       active: true,
       createdAt: DateTime.now(),
       allowedDepartments: [department],
@@ -211,6 +212,7 @@ class _RoomDraft {
 
   void dispose() {
     name.dispose();
+    code.dispose();
     floor.dispose();
     capacity.dispose();
   }
@@ -266,6 +268,17 @@ class _RoomDraftCardState extends State<_RoomDraftCard> {
               labelText: 'Room Name',
               prefixIcon: Icon(Icons.meeting_room_rounded),
             ),
+            validator: _AddAreaScreenState._required,
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: draft.code,
+            decoration: const InputDecoration(
+              labelText: 'Room Code',
+              hintText: 'Example: SR-1',
+              prefixIcon: Icon(Icons.tag_rounded),
+            ),
+            textCapitalization: TextCapitalization.characters,
             validator: _AddAreaScreenState._required,
           ),
           const SizedBox(height: 12),

@@ -15,7 +15,7 @@ class LogProvider extends ChangeNotifier {
   StreamSubscription<List<AccessLog>>? _sub;
   List<AccessLog> logs = [];
   String query = '';
-  int limit = 30;
+  int limit = 300;
   bool loading = false;
   bool syncing = false;
   int pendingCount = 0;
@@ -52,7 +52,7 @@ class LogProvider extends ChangeNotifier {
   }
 
   void loadMore() {
-    limit += 30;
+    limit += 100;
     listen();
   }
 

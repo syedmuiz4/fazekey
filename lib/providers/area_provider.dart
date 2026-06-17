@@ -102,7 +102,34 @@ class AreaProvider extends ChangeNotifier {
     }).toList();
     final extras = firestoreAreas
         .where((area) => !commandCenterAreas.containsKey(area.id))
+        .where((area) => !_isLegacyDuplicateRoom(area))
         .map((area) => area.copyWith(location: 'FSKTM'));
-    return [...commandRooms, ...extras];
+    final cleanRooms = <Area>[];
+    final seen = <String>{};
+    for (final area in [...commandRooms, ...extras]) {
+      final key = _roomIdentity(area);
+      if (key.isNotEmpty && !seen.add(key)) continue;
+      cleanRooms.add(area);
+    }
+    return cleanRooms;
   }
+
+  bool _isLegacyDuplicateRoom(Area area) {
+    final id = area.id.trim().toLowerCase();
+    final name = area.name.trim().toLowerCase();
+    final roomNumber = area.roomNumber.trim().toLowerCase();
+    return id == 'server_room' ||
+        name == 'server room' ||
+        name == 'nco network operations' ||
+        roomNumber == 'sr-01';
+  }
+
+  String _roomIdentity(Area area) {
+    final roomNumber = area.roomNumber.trim();
+    if (roomNumber.isNotEmpty) return _accessKey(roomNumber);
+    return _accessKey('${area.floor} ${area.name}');
+  }
+
+  String _accessKey(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
 }

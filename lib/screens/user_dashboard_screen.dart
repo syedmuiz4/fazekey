@@ -13,13 +13,13 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/access_grant.dart';
 import '../models/app_user.dart';
 import '../models/area.dart';
+import '../models/room_access_request.dart';
 import '../models/room_access_record.dart';
 import '../providers/auth_provider.dart';
 import '../services/firebase_service.dart';
 import '../widgets/app_background.dart';
 import 'edit_profile_screen.dart';
 import 'login_screen.dart';
-import 'welcome_screen.dart';
 
 class UserDashboardScreen extends StatefulWidget {
   const UserDashboardScreen({super.key});
@@ -697,110 +697,152 @@ class _CurrentRoomCardState extends State<_CurrentRoomCard> {
                     ? null
                     : _findAreaForRecord(areas, record);
                 final roomActive = currentArea?.active ?? true;
-                return _Panel(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.text.currentRoom,
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: .25,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      if (accessRoom == null)
-                        Text(
-                          widget.text.noActiveRoom,
-                          style: const TextStyle(
-                            color: Color(0xFF64748B),
-                            fontWeight: FontWeight.w800,
-                          ),
-                        )
-                      else ...[
-                        Row(
-                          children: [
-                            Icon(
-                              !roomActive
-                                  ? Icons.lock_rounded
-                                  : record == null
-                                  ? Icons.meeting_room_rounded
-                                  : Icons.check_circle_rounded,
-                              color: roomActive
-                                  ? const Color(0xFF16A34A)
-                                  : const Color(0xFFE11D48),
+                final assignedRooms = _assignedRoomNames(currentUser, areas);
+                return StreamBuilder<List<RoomAccessRequest>>(
+                  stream: widget.firebase.watchRoomAccessRequests(),
+                  builder: (context, requestSnapshot) {
+                    final pendingRequests =
+                        (requestSnapshot.data ?? const <RoomAccessRequest>[])
+                            .where(
+                              (request) =>
+                                  request.userId == currentUser.id &&
+                                  request.isOpen,
+                            )
+                            .toList();
+                    return _Panel(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.text.currentRoom,
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: .25,
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                accessRoom,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 10),
+                          if (accessRoom == null && pendingRequests.isEmpty)
+                            Text(
+                              widget.text.noActiveRoom,
+                              style: const TextStyle(
+                                color: Color(0xFF64748B),
+                                fontWeight: FontWeight.w800,
+                              ),
+                            )
+                          else ...[
+                            if (accessRoom != null) ...[
+                              Row(
+                                children: [
+                                  Icon(
+                                    !roomActive
+                                        ? Icons.lock_rounded
+                                        : Icons.check_circle_rounded,
+                                    color: roomActive
+                                        ? const Color(0xFF16A34A)
+                                        : const Color(0xFFE11D48),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      accessRoom,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                !roomActive
+                                    ? 'Room access is off for maintenance'
+                                    : '${widget.text.checkedIn}: ${DateFormat.yMMMd().add_jm().format(record!.timestamp)}',
                                 style: const TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16,
+                                  color: Color(0xFF64748B),
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
+                            ],
+                            for (final request in pendingRequests) ...[
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  const Icon(
+                                    Icons.hourglass_top_rounded,
+                                    color: Color(0xFFF59E0B),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      request.areaName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ),
+                                  const Text(
+                                    'Pending',
+                                    style: TextStyle(
+                                      color: Color(0xFFF59E0B),
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                          if (assignedRooms.isNotEmpty) ...[
+                            const SizedBox(height: 14),
+                            const Divider(height: 1),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Assigned Room',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: .2,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            _AssignedRoomList(
+                              rooms: assignedRooms,
+                              areas: areas,
+                              currentRoom: accessRoom ?? '',
                             ),
                           ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          !roomActive
-                              ? 'Room access is off for maintenance'
-                              : record == null
-                              ? widget.text.accessReady
-                              : '${widget.text.checkedIn}: ${DateFormat.yMMMd().add_jm().format(record.timestamp)}',
-                          style: const TextStyle(
-                            color: Color(0xFF64748B),
-                            fontWeight: FontWeight.w700,
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: () =>
+                                  setState(() => _showDetails = !_showDetails),
+                              icon: Icon(
+                                _showDetails
+                                    ? Icons.expand_less_rounded
+                                    : Icons.expand_more_rounded,
+                              ),
+                              label: Text(
+                                _showDetails
+                                    ? 'Hide room details'
+                                    : 'Room details',
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
-                      const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: () =>
-                              setState(() => _showDetails = !_showDetails),
-                          icon: Icon(
-                            _showDetails
-                                ? Icons.expand_less_rounded
-                                : Icons.expand_more_rounded,
-                          ),
-                          label: Text(
-                            _showDetails ? 'Hide room details' : 'Room details',
-                          ),
-                        ),
+                          if (_showDetails)
+                            _RoomCapacityList(
+                              rooms: _availableRoomNames(areas, grants),
+                              areas: areas,
+                            ),
+                        ],
                       ),
-                      if (_showDetails)
-                        _RoomCapacityList(
-                          rooms: _availableRoomNames(areas, grants),
-                          areas: areas,
-                        ),
-                      if (record != null) ...[
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: () async {
-                              await widget.firebase
-                                  .closeActiveRoomSessionForUser(currentUser);
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(widget.text.signedOutRoom),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.logout_rounded),
-                            label: Text(widget.text.signOutRoom),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+                    );
+                  },
                 );
               },
             );
@@ -837,16 +879,7 @@ class _HomeRoomActionButton extends StatelessWidget {
   Future<void> _showRoomActionDialog(BuildContext context) async {
     final currentUser = user;
     if (currentUser == null) return;
-    await firebase.closeActiveRoomSessionForUser(currentUser);
-    if (!context.mounted) return;
-    final auth = context.read<AuthProvider>();
-    final ok = await auth.logout();
-    if (!context.mounted || !ok) return;
-    Navigator.of(context).pushNamedAndRemoveUntil(
-      LoginScreen.route,
-      (_) => false,
-      arguments: const {'showEnterRoomPrompt': true},
-    );
+    await _exitRoomAndLogout(context, firebase: firebase, user: currentUser);
   }
 }
 
@@ -930,10 +963,19 @@ class _NewRoomRequestDialogState extends State<_NewRoomRequestDialog> {
     if (area == null) return;
     setState(() => _sending = true);
     try {
+      final active = await widget.firebase.getActiveRoomSession(widget.user.id);
+      if (active != null) {
+        await widget.firebase.closeActiveRoomSessionForUser(widget.user);
+      }
+      final stillActive = active == null
+          ? null
+          : await widget.firebase.getActiveRoomSession(widget.user.id);
       await widget.firebase.createRoomAccessRequest(
         user: widget.user,
         area: area,
         areaName: _areaDisplay(area),
+        exitedPreviousRoom: active != null && stillActive == null,
+        previousRoomName: active?.areaName ?? '',
       );
       if (!mounted) return;
       Navigator.pop(context);
@@ -1027,6 +1069,112 @@ class _RoomCapacityList extends StatelessWidget {
   }
 }
 
+class _AssignedRoomList extends StatelessWidget {
+  const _AssignedRoomList({
+    required this.rooms,
+    required this.areas,
+    required this.currentRoom,
+  });
+
+  final List<String> rooms;
+  final List<Area> areas;
+  final String currentRoom;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final room in rooms)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _AssignedRoomRow(
+              room: room,
+              area: _matchingArea(room),
+              active: _accessKey(room) == _accessKey(currentRoom),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Area? _matchingArea(String room) {
+    final key = _accessKey(room);
+    for (final area in areas) {
+      if (_areaRoomKeys(area).contains(key)) return area;
+    }
+    return null;
+  }
+}
+
+class _AssignedRoomRow extends StatelessWidget {
+  const _AssignedRoomRow({
+    required this.room,
+    required this.area,
+    required this.active,
+  });
+
+  final String room;
+  final Area? area;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = area?.active ?? true;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: active ? const Color(0xFFEFFDF7) : const Color(0xFFF8FDFF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: active ? const Color(0xFF22C55E) : const Color(0xFFE0F2FE),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              active
+                  ? Icons.check_circle_rounded
+                  : enabled
+                  ? Icons.assignment_ind_rounded
+                  : Icons.lock_rounded,
+              color: active
+                  ? const Color(0xFF16A34A)
+                  : enabled
+                  ? const Color(0xFF0D9488)
+                  : const Color(0xFFE11D48),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                room,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            Text(
+              active
+                  ? 'Current'
+                  : enabled
+                  ? 'Assigned'
+                  : 'Off',
+              style: TextStyle(
+                color: active
+                    ? const Color(0xFF16A34A)
+                    : enabled
+                    ? const Color(0xFF0D9488)
+                    : const Color(0xFFE11D48),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _RoomCapacityRow extends StatelessWidget {
   const _RoomCapacityRow({required this.room, required this.area});
 
@@ -1106,6 +1254,56 @@ List<String> _availableRoomNames(List<Area> areas, List<AccessGrant> grants) {
   return rooms;
 }
 
+List<String> _assignedRoomNames(AppUser user, List<Area> areas) {
+  final rooms = <String>[];
+  for (final assigned in user.assignedRooms) {
+    final key = _accessKey(assigned);
+    if (key.isEmpty) continue;
+    final area = areas.cast<Area?>().firstWhere(
+      (area) => area != null && _areaRoomKeys(area).contains(key),
+      orElse: () => null,
+    );
+    final label = area == null ? assigned.trim() : _areaDisplay(area);
+    if (rooms.any((room) => _accessKey(room) == _accessKey(label))) continue;
+    rooms.add(label);
+  }
+  return rooms;
+}
+
+Future<void> _exitRoomAndLogout(
+  BuildContext context, {
+  required FirebaseService firebase,
+  required AppUser user,
+}) async {
+  final active = await firebase.getActiveRoomSession(user.id);
+  if (active != null) {
+    await firebase.recordRoomExit(
+      user: user,
+      area: Area(
+        id: active.areaId,
+        name: active.areaName,
+        location: '',
+        floor: '',
+        roomNumber: '',
+        active: true,
+        createdAt: DateTime.now(),
+        allowedDepartments: const [],
+        allowedRoles: const [],
+        currentOccupancy: 0,
+        capacity: 0,
+      ),
+      areaName: active.areaName,
+      reason: 'User exited room and signed out',
+    );
+  }
+  if (!context.mounted) return;
+  final ok = await context.read<AuthProvider>().logout();
+  if (!context.mounted || !ok) return;
+  Navigator.of(
+    context,
+  ).pushNamedAndRemoveUntil(LoginScreen.route, (_) => false);
+}
+
 Area? _findAreaForRecord(List<Area> areas, RoomAccessRecord record) {
   for (final area in areas) {
     if (area.id == record.areaId ||
@@ -1143,7 +1341,7 @@ class _HistoryTab extends StatelessWidget {
             padding: const EdgeInsets.all(18),
             children: [
               const Text(
-                'History',
+                'Rooms',
                 style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w900,
@@ -1212,6 +1410,8 @@ class _ProfileTab extends StatelessWidget {
           _ProfilePassCard(pass: pass, user: user, firebase: firebase),
           if (user != null) ...[
             const SizedBox(height: 14),
+            _ProfileIdentityCard(user: user!),
+            const SizedBox(height: 14),
             StreamBuilder<List<AccessGrant>>(
               stream: firebase.watchAccessGrants(userId: user!.id, limit: 80),
               builder: (context, snapshot) {
@@ -1219,11 +1419,10 @@ class _ProfileTab extends StatelessWidget {
                     user!.accessValidUntil ??
                     _latestGrantExpiry(snapshot.data ?? const <AccessGrant>[]);
                 return _Panel(
-                  child: _InlineInfo(
+                  child: _FacultyAccessValidityTile(
                     label: text.validUntil,
-                    value: validUntil == null
-                        ? text.noExpiryAvailable
-                        : DateFormat.yMMMd().add_jm().format(validUntil),
+                    emptyText: text.noExpiryAvailable,
+                    validUntil: validUntil,
                   ),
                 );
               },
@@ -1250,6 +1449,24 @@ class _ProfileTab extends StatelessWidget {
                     areas: snapshot.data ?? const <Area>[],
                   ),
                 ),
+                if (user != null) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => showDialog<void>(
+                        context: context,
+                        builder: (_) => _NewRoomRequestDialog(
+                          user: user!,
+                          firebase: firebase,
+                          text: text,
+                        ),
+                      ),
+                      icon: const Icon(Icons.add_location_alt_rounded),
+                      label: Text(text.enterNewRoom),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1257,6 +1474,122 @@ class _ProfileTab extends StatelessWidget {
       ),
     );
   }
+}
+
+class _FacultyAccessValidityTile extends StatelessWidget {
+  const _FacultyAccessValidityTile({
+    required this.label,
+    required this.emptyText,
+    required this.validUntil,
+  });
+
+  final String label;
+  final String emptyText;
+  final DateTime? validUntil;
+
+  @override
+  Widget build(BuildContext context) {
+    final date = validUntil;
+    final shortValue = date == null
+        ? emptyText
+        : DateFormat('d MMM yyyy').format(date);
+    final fullValue = date == null
+        ? emptyText
+        : DateFormat('EEEE, MMMM d, yyyy h:mm:ss a').format(date);
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(label),
+          content: Text(fullValue),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFF0F9FF),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFBAE6FD)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              const Icon(Icons.event_available_rounded, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                shortValue,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right_rounded),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileIdentityCard extends StatelessWidget {
+  const _ProfileIdentityCard({required this.user});
+
+  final AppUser user;
+
+  @override
+  Widget build(BuildContext context) {
+    final academicLabel = user.position.trim().toLowerCase() == 'staff'
+        ? 'Department'
+        : 'Programme';
+    final academicValue = user.position.trim().toLowerCase() == 'staff'
+        ? user.department
+        : (user.course.trim().isEmpty ? user.department : user.course);
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Profile Details',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .25,
+            ),
+          ),
+          const SizedBox(height: 10),
+          _InlineInfo(label: 'ID', value: _valueOrDash(user.identityNumber)),
+          const SizedBox(height: 8),
+          _InlineInfo(label: 'Email', value: _valueOrDash(user.email)),
+          const SizedBox(height: 8),
+          _InlineInfo(label: 'Phone', value: _valueOrDash(user.phone)),
+          const SizedBox(height: 8),
+          _InlineInfo(label: academicLabel, value: _valueOrDash(academicValue)),
+          const SizedBox(height: 8),
+          _InlineInfo(label: 'Faculty', value: _valueOrDash(user.faculty)),
+        ],
+      ),
+    );
+  }
+}
+
+String _valueOrDash(String value) {
+  final trimmed = value.trim();
+  return trimmed.isEmpty ? '-' : trimmed;
 }
 
 class _HistorySummary extends StatelessWidget {
@@ -1450,24 +1783,6 @@ class _SettingsTab extends StatelessWidget {
                   },
                 ),
               ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          _Panel(
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.logout_rounded),
-              title: const Text(
-                'Sign Out',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-              onTap: () async {
-                final ok = await context.read<AuthProvider>().logout();
-                if (!context.mounted || !ok) return;
-                Navigator.of(
-                  context,
-                ).pushNamedAndRemoveUntil(WelcomeScreen.route, (_) => false);
-              },
             ),
           ),
         ],
@@ -2354,9 +2669,23 @@ _CampusNews? _matchingNews(List<_CampusNews> news, int order) {
 String _areaDisplay(Area area) {
   final name = area.name.trim();
   final room = area.roomNumber.trim();
+  final level = _shortFloorLabel(area.floor);
+  final prefix = level.isEmpty ? '' : '($level) ';
+  if (room.isNotEmpty && name.isNotEmpty) return '$prefix$room - $name';
   if (name.isNotEmpty) return name;
   if (room.isNotEmpty) return 'Room $room';
   return area.id.trim().isEmpty ? 'Room Asset' : area.id.trim();
+}
+
+String _shortFloorLabel(String floor) {
+  final value = floor.trim().toLowerCase().replaceAll(' ', '');
+  if (value.isEmpty) return '';
+  if (value == 'levelg' || value == 'g' || value.contains('ground')) {
+    return 'LG';
+  }
+  final match = RegExp(r'(?:level|l)?(\d+)').firstMatch(value);
+  if (match == null) return floor.trim();
+  return 'L${match.group(1)}';
 }
 
 Set<String> _areaRoomKeys(Area area) {
@@ -2554,8 +2883,8 @@ class _UserText {
   String get language => _ms ? 'Bahasa' : 'Language';
 
   String navLabel(int index) {
-    final english = ['Home', 'History', 'Profile', 'Settings'];
-    final malay = ['Utama', 'Sejarah', 'Profil', 'Tetapan'];
+    final english = ['Home', 'Rooms', 'Profile', 'Settings'];
+    final malay = ['Utama', 'Bilik', 'Profil', 'Tetapan'];
     final source = _ms ? malay : english;
     return source[index.clamp(0, source.length - 1)];
   }
